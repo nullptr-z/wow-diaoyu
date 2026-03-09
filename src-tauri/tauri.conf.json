@@ -1,0 +1,25 @@
+{
+  "build": {
+    "beforeBuildCommand": "",
+    "beforeDevCommand": "",
+    "devPath": "../ui",
+    "distDir": "../ui"
+  },
+  "package": {
+    "productName": "WOW Fishing UI",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "windows": [
+      {
+        "title": "WOW Fishing UI",
+        "width": 1100,
+        "height": 760,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}
