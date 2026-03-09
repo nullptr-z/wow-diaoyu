@@ -34,6 +34,29 @@ pip install -r requirements.txt
 - 游戏尽量用窗口化或无边框窗口，避免独占全屏导致截图异常。
 - 如果游戏以管理员权限运行，脚本也需要管理员权限启动。
 
+## Tauri UI (Windows)
+
+The UI wraps the existing Python bot. Make sure the Python deps from `requirements.txt`
+are installed in the same interpreter you point the UI at.
+
+```bash
+cargo install tauri-cli
+cargo tauri dev
+```
+
+UI tips:
+- Set `Python command` to your venv python, e.g. `.\.venv\Scripts\python.exe`.
+- Keep `Config path` as `config.json` unless you want a different file.
+- Use Load/Save to edit values, then Start to run.
+- Use Record audio to save a wav sample for tuning the hook sound.
+- Use Capture bobber, then click the bobber in game to save a template image.
+
+Optional build:
+
+```bash
+cargo tauri build
+```
+
 ## 配置
 
 复制示例配置并按需修改：
@@ -57,6 +80,13 @@ python src/wow_fishing_bot.py --config config.json
 可选：
 - `--list-devices`：列出可用音频输入设备。
 - `--once`：只执行一次抛竿-检测-点击流程，便于调试。
+- `--record`：录制音频并保存为 wav，便于抓取上钩水声样本。
+- `--record-seconds`：录制时长（秒），默认 8。
+- `--record-out`：录音输出路径，默认 `recordings/hook.wav`。
+- `--capture-bobber`：截取鱼漂模板并保存为 png。
+- `--capture-size`：截取尺寸（像素），默认 72。
+- `--capture-out`：截取输出路径，默认 `assets/bobber_template.png`。
+- `--capture-timeout`：等待点击超时时间（秒），默认 10。
 
 ## 注意
 

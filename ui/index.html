@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WOW Fishing UI</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="tauri://localhost/tauri.js"></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <div class="bg-shape one"></div>
+    <div class="bg-shape two"></div>
+    <div class="app">
+      <header class="hero">
+        <div class="hero-text">
+          <p class="kicker">Fishing automation console</p>
+          <h1>WOW Fishing UI</h1>
+          <p class="subtitle">Sound trigger + vision match controller</p>
+        </div>
+        <div class="status" id="status">
+          <span class="dot" id="status-dot"></span>
+          <span class="label" id="status-label">Idle</span>
+        </div>
+      </header>
+
+      <div class="content">
+        <aside class="panel controls">
+          <h2>Runtime</h2>
+          <label class="field">
+            <span>Config path</span>
+            <input id="config-path" type="text" value="config.json" />
+          </label>
+          <label class="field">
+            <span>Python command</span>
+            <input id="python-cmd" type="text" value="python" />
+          </label>
+          <label class="checkbox">
+            <input id="run-once" type="checkbox" />
+            <span>Run once</span>
+          </label>
+          <div class="button-row">
+            <button id="load-btn">Load</button>
+            <button id="save-btn">Save</button>
+            <button id="start-btn" class="primary">Start</button>
+            <button id="stop-btn">Stop</button>
+          </div>
+          <div class="button-row">
+            <button id="devices-btn" class="ghost">List audio devices</button>
+            <button id="clear-logs" class="ghost">Clear logs</button>
+          </div>
+          <div class="section-label">Audio capture</div>
+          <label class="field">
+            <span>Record seconds</span>
+            <input id="record-seconds" type="number" step="0.5" value="8" />
+          </label>
+          <label class="field">
+            <span>Output path</span>
+            <input id="record-output" type="text" value="recordings/hook.wav" />
+          </label>
+          <div class="button-row single">
+            <button id="record-btn" class="primary">Record audio</button>
+          </div>
+          <div class="section-label">Bobber capture</div>
+          <label class="field">
+            <span>Template path</span>
+            <input
+              id="capture-output"
+              type="text"
+              value="assets/bobber_template.png"
+            />
+          </label>
+          <label class="field">
+            <span>Capture size (px)</span>
+            <input id="capture-size" type="number" step="1" value="72" />
+          </label>
+          <label class="field">
+            <span>Timeout (sec)</span>
+            <input id="capture-timeout" type="number" step="0.5" value="10" />
+          </label>
+          <div class="button-row single">
+            <button id="capture-btn">Capture bobber</button>
+          </div>
+          <p class="hint">Use your venv python, e.g. .\.venv\Scripts\python.exe</p>
+        </aside>
+
+        <main class="panel config">
+          <h2>Configuration</h2>
+          <form id="config-form">
+            <section class="group">
+              <div class="group-title">Casting</div>
+              <div class="grid">
+                <label class="field">
+                  <span>Cast key</span>
+                  <input type="text" data-path="cast_key" />
+                </label>
+                <label class="field">
+                  <span>Cast delay (sec)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    data-type="float"
+                    data-path="cast_delay_sec"
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section class="group">
+              <div class="group-title">Audio</div>
+              <div class="grid">
+                <label class="field">
+                  <span>Sample rate</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="int"
+                    data-path="audio.sample_rate"
+                  />
+                </label>
+                <label class="field">
+                  <span>FFT size</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="int"
+                    data-path="audio.fft_size"
+                  />
+                </label>
+                <label class="field">
+                  <span>Target freq (Hz)</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="float"
+                    data-path="audio.freq_target_hz"
+                  />
+                </label>
+                <label class="field">
+                  <span>Band width (Hz)</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="float"
+                    data-path="audio.freq_band_hz"
+                  />
+                </label>
+                <label class="field">
+                  <span>Ratio threshold</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    data-type="float"
+                    data-path="audio.ratio_threshold"
+                  />
+                </label>
+                <label class="field">
+                  <span>Consecutive hits</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="int"
+                    data-path="audio.consecutive_hits"
+                  />
+                </label>
+                <label class="field">
+                  <span>Device index (optional)</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="int"
+                    data-nullable="true"
+                    data-path="audio.device"
+                  />
+                </label>
+                <label class="checkbox inline">
+                  <input type="checkbox" data-path="audio.wasapi_loopback" />
+                  <span>WASAPI loopback (Windows)</span>
+                </label>
+              </div>
+            </section>
+
+            <section class="group">
+              <div class="group-title">Vision</div>
+              <div class="grid">
+                <label class="field">
+                  <span>Template path</span>
+                  <input type="text" data-path="vision.template_path" />
+                </label>
+                <label class="field">
+                  <span>Match threshold</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    data-type="float"
+                    data-path="vision.match_threshold"
+                  />
+                </label>
+                <label class="field">
+                  <span>Region left</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="int"
+                    data-path="vision.search_region.left"
+                  />
+                </label>
+                <label class="field">
+                  <span>Region top</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="int"
+                    data-path="vision.search_region.top"
+                  />
+                </label>
+                <label class="field">
+                  <span>Region width</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="int"
+                    data-path="vision.search_region.width"
+                  />
+                </label>
+                <label class="field">
+                  <span>Region height</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="int"
+                    data-path="vision.search_region.height"
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section class="group">
+              <div class="group-title">Click</div>
+              <div class="grid">
+                <label class="field">
+                  <span>Move delay (sec)</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    data-type="float"
+                    data-path="click.move_delay_sec"
+                  />
+                </label>
+                <label class="field">
+                  <span>Post click delay (sec)</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    data-type="float"
+                    data-path="click.post_click_delay_sec"
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section class="group">
+              <div class="group-title">Loop</div>
+              <div class="grid">
+                <label class="field">
+                  <span>Idle sleep (sec)</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    data-type="float"
+                    data-path="loop.idle_sleep_sec"
+                  />
+                </label>
+                <label class="field">
+                  <span>Max wait (sec)</span>
+                  <input
+                    type="number"
+                    step="1"
+                    data-type="float"
+                    data-path="loop.max_wait_sec"
+                  />
+                </label>
+              </div>
+            </section>
+          </form>
+        </main>
+      </div>
+
+      <section class="panel logs">
+        <div class="logs-header">
+          <h2>Logs</h2>
+          <div class="log-meta" id="log-meta">0 lines</div>
+        </div>
+        <pre id="log-output"></pre>
+      </section>
+    </div>
+  </body>
+</html>

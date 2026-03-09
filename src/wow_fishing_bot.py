@@ -2,8 +2,11 @@
 import argparse
 import copy
 import json
+import os
 import queue
+import threading
 import time
+import wave
 from dataclasses import dataclass
 
 import cv2
@@ -11,7 +14,7 @@ import numpy as np
 import sounddevice as sd
 from mss import mss
 from pynput.keyboard import Controller as KeyboardController, Key
-from pynput.mouse import Button, Controller as MouseController
+from pynput.mouse import Button, Controller as MouseController, Listener as MouseListener
 
 DEFAULT_CONFIG = {
     "cast_key": "1",
@@ -76,6 +79,19 @@ def parse_key(key_name):
     return SPECIAL_KEYS.get(key_name, key_name)
 
 
+def build_wasapi_settings(enabled):
+    if not enabled:
+        return None
+    if hasattr(sd, "WasapiSettings"):
+        try:
+            return sd.WasapiSettings(loopback=True)
+        except Exception as exc:
+            print(f"[audio] WASAPI loopback unavailable: {exc}")
+            return None
+    print("[audio] WASAPI loopback not supported on this platform")
+    return None
+
+
 @dataclass
 class AudioConfig:
     sample_rate: int
@@ -103,15 +119,7 @@ class AudioDetector:
     def start(self):
         if self.stream is not None:
             return
-        extra_settings = None
-        if self.config.wasapi_loopback:
-            if hasattr(sd, "WasapiSettings"):
-                try:
-                    extra_settings = sd.WasapiSettings(loopback=True)
-                except Exception as exc:
-                    print(f"[audio] WASAPI loopback unavailable: {exc}")
-            else:
-                print("[audio] WASAPI loopback not supported on this platform")
+        extra_settings = build_wasapi_settings(self.config.wasapi_loopback)
         self.stream = sd.InputStream(
             samplerate=self.config.sample_rate,
             blocksize=self.config.fft_size,
@@ -166,6 +174,91 @@ class AudioDetector:
         else:
             self.hit_count = 0
         return self.hit_count >= self.config.consecutive_hits
+
+
+def record_audio(config: AudioConfig, seconds: float, output_path: str):
+    if seconds <= 0:
+        raise ValueError("record seconds must be > 0")
+    frames = max(1, int(seconds * config.sample_rate))
+    extra_settings = build_wasapi_settings(config.wasapi_loopback)
+    print(f"[record] start {seconds:.1f}s at {config.sample_rate} Hz")
+    data = sd.rec(
+        frames,
+        samplerate=config.sample_rate,
+        channels=1,
+        dtype="float32",
+        device=config.device,
+        blocking=True,
+        extra_settings=extra_settings,
+    )
+    data = np.clip(data, -1.0, 1.0)
+    pcm = (data * 32767).astype(np.int16)
+    folder = os.path.dirname(output_path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    with wave.open(output_path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(config.sample_rate)
+        wf.writeframes(pcm.tobytes())
+    print(f"[record] saved {output_path}")
+
+
+def wait_for_click(timeout_sec):
+    event = threading.Event()
+    result = {}
+
+    def on_click(x, y, button, pressed):
+        if pressed:
+            result["pos"] = (int(x), int(y))
+            event.set()
+            return False
+        return None
+
+    listener = MouseListener(on_click=on_click)
+    listener.start()
+    event.wait(timeout_sec)
+    listener.stop()
+    listener.join()
+    if "pos" not in result:
+        raise TimeoutError("capture timeout")
+    return result["pos"]
+
+
+def capture_bobber(size: int, output_path: str, timeout_sec: float):
+    if size <= 0:
+        raise ValueError("capture size must be > 0")
+    if timeout_sec <= 0:
+        raise ValueError("capture timeout must be > 0")
+    print(f"[capture] click the bobber within {timeout_sec:.1f}s")
+    x, y = wait_for_click(timeout_sec)
+    with mss() as sct:
+        monitor = sct.monitors[0]
+        left = int(x - size // 2)
+        top = int(y - size // 2)
+        max_left = monitor["left"]
+        max_top = monitor["top"]
+        max_right = max_left + monitor["width"]
+        max_bottom = max_top + monitor["height"]
+        left = max(max_left, min(left, max_right - 1))
+        top = max(max_top, min(top, max_bottom - 1))
+        width = min(size, max_right - left)
+        height = min(size, max_bottom - top)
+        if width <= 0 or height <= 0:
+            raise ValueError("capture region out of bounds")
+        region = {
+            "left": left,
+            "top": top,
+            "width": width,
+            "height": height,
+        }
+        frame = np.array(sct.grab(region))
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+    folder = os.path.dirname(output_path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    cv2.imwrite(output_path, gray)
+    print(f"[capture] saved {output_path} ({width}x{height})")
 
 
 @dataclass
@@ -294,6 +387,40 @@ def parse_args():
     parser = argparse.ArgumentParser(description="WOW fishing automation")
     parser.add_argument("--config", default="config.json", help="path to config file")
     parser.add_argument("--list-devices", action="store_true", help="list audio devices")
+    parser.add_argument("--record", action="store_true", help="record audio and exit")
+    parser.add_argument(
+        "--record-seconds",
+        type=float,
+        default=8.0,
+        help="record duration in seconds",
+    )
+    parser.add_argument(
+        "--record-out",
+        default="recordings/hook.wav",
+        help="record output wav path",
+    )
+    parser.add_argument(
+        "--capture-bobber",
+        action="store_true",
+        help="capture bobber template and exit",
+    )
+    parser.add_argument(
+        "--capture-size",
+        type=int,
+        default=72,
+        help="capture size in pixels",
+    )
+    parser.add_argument(
+        "--capture-out",
+        default="assets/bobber_template.png",
+        help="capture output png path",
+    )
+    parser.add_argument(
+        "--capture-timeout",
+        type=float,
+        default=10.0,
+        help="capture click timeout in seconds",
+    )
     parser.add_argument("--once", action="store_true", help="run only one loop")
     return parser.parse_args()
 
@@ -304,6 +431,17 @@ def main():
         print(sd.query_devices())
         return
     config = load_config(args.config)
+    if args.record:
+        audio_cfg = AudioConfig(**config["audio"])
+        record_audio(audio_cfg, args.record_seconds, args.record_out)
+        return
+    if args.capture_bobber:
+        try:
+            capture_bobber(args.capture_size, args.capture_out, args.capture_timeout)
+        except Exception as exc:
+            print(f"[capture] error: {exc}")
+            raise SystemExit(1)
+        return
     bot = FishingBot(config)
     bot.run(once=args.once)
 
