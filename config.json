@@ -1,0 +1,32 @@
+{
+  "cast_key": "1",
+  "cast_delay_sec": 1.5,
+  "audio": {
+    "sample_rate": 44100,
+    "fft_size": 2048,
+    "freq_target_hz": 1200,
+    "freq_band_hz": 300,
+    "ratio_threshold": 0.35,
+    "consecutive_hits": 2,
+    "wasapi_loopback": false,
+    "device": null
+  },
+  "vision": {
+    "template_path": "assets/bobber_template.png",
+    "search_region": {
+      "left": 200,
+      "top": 200,
+      "width": 800,
+      "height": 600
+    },
+    "match_threshold": 0.75
+  },
+  "click": {
+    "move_delay_sec": 0.05,
+    "post_click_delay_sec": 0.2
+  },
+  "loop": {
+    "idle_sleep_sec": 0.05,
+    "max_wait_sec": 25
+  }
+}

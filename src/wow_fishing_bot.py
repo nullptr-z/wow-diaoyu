@@ -341,7 +341,11 @@ class FishingBot:
         self.max_wait_sec = config["loop"]["max_wait_sec"]
         self.idle_sleep_sec = config["loop"]["idle_sleep_sec"]
 
-    def run(self, once=False):
+    def run(self, once=False, countdown=5):
+        print(f"[bot] starting in {countdown} seconds, switch to game window now!")
+        for i in range(countdown, 0, -1):
+            print(f"  {i}...")
+            time.sleep(1)
         self.audio.start()
         print("[bot] started, press Ctrl+C to stop.")
         try:
