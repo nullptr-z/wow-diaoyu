@@ -159,20 +159,24 @@ class AudioDetector:
         )
         self._loopback_channels = dev["maxInputChannels"]
         self._loopback_rate = int(dev["defaultSampleRate"])
+        if self._loopback_rate != self.config.sample_rate:
+            self._loopback_read_size = int(
+                np.ceil(self.config.fft_size * self._loopback_rate / self.config.sample_rate)
+            )
+        else:
+            self._loopback_read_size = self.config.fft_size
         self._loopback_thread = threading.Thread(target=self._loopback_reader, daemon=True)
         self._loopback_thread.start()
 
     def _loopback_reader(self):
         while self._loopback_running:
             try:
-                raw = self.stream.read(self.config.fft_size, exception_on_overflow=False)
+                raw = self.stream.read(self._loopback_read_size, exception_on_overflow=False)
                 data = np.frombuffer(raw, dtype=np.float32)
                 if self._loopback_channels > 1:
                     data = data.reshape(-1, self._loopback_channels)[:, 0]
                 if self._loopback_rate != self.config.sample_rate:
-                    ratio = self.config.sample_rate / self._loopback_rate
-                    new_len = int(len(data) * ratio)
-                    indices = np.linspace(0, len(data) - 1, new_len).astype(int)
+                    indices = np.linspace(0, len(data) - 1, self.config.fft_size).astype(int)
                     data = data[indices]
                 self._callback(data.reshape(-1, 1), None, None, None)
             except Exception:

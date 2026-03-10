@@ -17,6 +17,7 @@ args = [
     "--hidden-import", "pynput.keyboard._win32",
     "--hidden-import", "pynput.mouse._win32",
     "--hidden-import", "pyaudiowpatch",
+    "--collect-all", "pyaudiowpatch",
     "--collect-all", "sounddevice",
     "src\\wow_fishing_bot.py",
 ]
