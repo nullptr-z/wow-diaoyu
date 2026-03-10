@@ -11,6 +11,11 @@ const saveBtn = document.getElementById("save-btn");
 const devicesBtn = document.getElementById("devices-btn");
 const recordBtn = document.getElementById("record-btn");
 const captureBtn = document.getElementById("capture-btn");
+const pickRegionBtn = document.getElementById("pick-region-btn");
+const regionLeftInput = document.getElementById("region-left");
+const regionTopInput = document.getElementById("region-top");
+const regionWidthInput = document.getElementById("region-width");
+const regionHeightInput = document.getElementById("region-height");
 const clearLogsBtn = document.getElementById("clear-logs");
 const recordSecondsInput = document.getElementById("record-seconds");
 const recordOutputInput = document.getElementById("record-output");
@@ -326,6 +331,33 @@ async function captureBobber() {
   }
 }
 
+async function pickRegion() {
+  const timeout = Number.parseFloat(captureTimeoutInput.value) || 15;
+  pickRegionBtn.disabled = true;
+  appendLog(`pick region: click TOP-LEFT corner, then BOTTOM-RIGHT corner (${timeout}s per click)`);
+  try {
+    const output = await invoke("capture_region", {
+      pythonCmd: pythonCmdInput.value,
+      configPath: configPathInput.value,
+      timeout,
+    });
+    appendLogLines(output);
+    // The last line of output is JSON: {"left":..., "top":..., "width":..., "height":...}
+    const lines = output.trim().split("\n");
+    const jsonLine = lines[lines.length - 1];
+    const region = JSON.parse(jsonLine);
+    regionLeftInput.value = region.left;
+    regionTopInput.value = region.top;
+    regionWidthInput.value = region.width;
+    regionHeightInput.value = region.height;
+    appendLog(`region set: left=${region.left}, top=${region.top}, width=${region.width}, height=${region.height}`);
+  } catch (err) {
+    appendLog(`pick region failed: ${err}`);
+  } finally {
+    pickRegionBtn.disabled = false;
+  }
+}
+
 function bindEvents() {
   loadBtn.addEventListener("click", loadConfig);
   saveBtn.addEventListener("click", saveConfig);
@@ -334,6 +366,7 @@ function bindEvents() {
   devicesBtn.addEventListener("click", listDevices);
   recordBtn.addEventListener("click", recordAudio);
   captureBtn.addEventListener("click", captureBobber);
+  pickRegionBtn.addEventListener("click", pickRegion);
   clearLogsBtn.addEventListener("click", () => {
     logLines.length = 0;
     logOutput.textContent = "";

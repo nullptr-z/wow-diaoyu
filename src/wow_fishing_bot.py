@@ -325,6 +325,26 @@ def wait_for_click(timeout_sec):
     return result["pos"]
 
 
+def capture_region(timeout_sec: float):
+    """Wait for two clicks (top-left, bottom-right) and return the region."""
+    if timeout_sec <= 0:
+        raise ValueError("capture timeout must be > 0")
+    print(f"[region] click TOP-LEFT corner within {timeout_sec:.1f}s")
+    x1, y1 = wait_for_click(timeout_sec)
+    print(f"[region] got top-left: ({x1}, {y1})")
+    print(f"[region] now click BOTTOM-RIGHT corner within {timeout_sec:.1f}s")
+    x2, y2 = wait_for_click(timeout_sec)
+    print(f"[region] got bottom-right: ({x2}, {y2})")
+    left = min(x1, x2)
+    top = min(y1, y2)
+    width = abs(x2 - x1)
+    height = abs(y2 - y1)
+    if width <= 0 or height <= 0:
+        raise ValueError("region has zero area — two clicks are at the same position")
+    print(f"[region] result: left={left}, top={top}, width={width}, height={height}")
+    return {"left": left, "top": top, "width": width, "height": height}
+
+
 def capture_bobber(size: int, output_path: str, timeout_sec: float):
     if size <= 0:
         raise ValueError("capture size must be > 0")
@@ -387,14 +407,20 @@ class VisionLocator:
             "width": self.config.search_width,
             "height": self.config.search_height,
         }
+        print(f"[vision] searching region: left={region['left']}, top={region['top']}, "
+              f"width={region['width']}, height={region['height']}")
+        print(f"[vision] template size: {self.template_w}x{self.template_h}")
         frame = np.array(self.sct.grab(region))
         gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
         result = cv2.matchTemplate(gray, self.template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        print(f"[vision] best match: score={max_val:.4f}, pos={max_loc}, threshold={self.config.match_threshold}")
         if max_val < self.config.match_threshold:
+            print(f"[vision] REJECTED: score {max_val:.4f} < threshold {self.config.match_threshold}")
             return None
         x = region["left"] + max_loc[0] + self.template_w // 2
         y = region["top"] + max_loc[1] + self.template_h // 2
+        print(f"[vision] MATCHED: clicking at ({x}, {y})")
         return (x, y, max_val)
 
 
@@ -469,9 +495,10 @@ class FishingBot:
                         return
                     continue
 
+                print("[bot] hook detected! looking for bobber...")
                 match = self.vision.find()
                 if match is None:
-                    print("[bot] hook detected, but no bobber match")
+                    print("[bot] hook detected, but no bobber match — skipping click, recast")
                     if once:
                         return
                     continue
@@ -479,6 +506,7 @@ class FishingBot:
                 x, y, score = match
                 print(f"[bot] click at ({x}, {y}), score={score:.3f}")
                 self.input.click(x, y)
+                print("[bot] click done, waiting before next cast")
                 if once:
                     return
         except KeyboardInterrupt:
@@ -525,6 +553,17 @@ def parse_args():
         default=10.0,
         help="capture click timeout in seconds",
     )
+    parser.add_argument(
+        "--capture-region",
+        action="store_true",
+        help="interactively pick search region (two clicks) and exit",
+    )
+    parser.add_argument(
+        "--region-timeout",
+        type=float,
+        default=15.0,
+        help="timeout per click when capturing region",
+    )
     parser.add_argument("--once", action="store_true", help="run only one loop")
     return parser.parse_args()
 
@@ -538,6 +577,14 @@ def main():
     if args.record:
         audio_cfg = AudioConfig(**config["audio"])
         record_audio(audio_cfg, args.record_seconds, args.record_out)
+        return
+    if args.capture_region:
+        try:
+            region = capture_region(args.region_timeout)
+            print(json.dumps(region))
+        except Exception as exc:
+            print(f"[region] error: {exc}")
+            raise SystemExit(1)
         return
     if args.capture_bobber:
         try:

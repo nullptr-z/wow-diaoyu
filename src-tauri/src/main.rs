@@ -1,7 +1,9 @@
 use serde_json::Value;
 use std::{
+    env,
     fs,
     io::{BufRead, BufReader},
+    path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     thread,
@@ -13,21 +15,44 @@ struct BotState {
     child: Option<Child>,
 }
 
+/// Resolve paths relative to the project root (parent of src-tauri)
+/// so that config.json is never written inside the watched src-tauri/ dir.
+fn project_root() -> PathBuf {
+    // CARGO_MANIFEST_DIR is .../src-tauri at compile time
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    PathBuf::from(manifest)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| env::current_dir().unwrap())
+}
+
+fn resolve_path(rel: &str) -> PathBuf {
+    let p = PathBuf::from(rel);
+    if p.is_absolute() {
+        p
+    } else {
+        project_root().join(p)
+    }
+}
+
 #[tauri::command]
 fn load_config(path: String) -> Result<Value, String> {
-    let raw = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    let full = resolve_path(&path);
+    let raw = fs::read_to_string(&full).map_err(|err| err.to_string())?;
     serde_json::from_str(&raw).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 fn save_config(path: String, config: Value) -> Result<(), String> {
+    let full = resolve_path(&path);
     let raw = serde_json::to_string_pretty(&config).map_err(|err| err.to_string())?;
-    fs::write(path, raw).map_err(|err| err.to_string())
+    fs::write(&full, raw).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 fn list_audio_devices(python_cmd: String) -> Result<String, String> {
     let output = Command::new(python_cmd)
+        .current_dir(project_root())
         .args([
             "-c",
             "import sounddevice as sd; print(sd.query_devices())",
@@ -61,6 +86,7 @@ fn record_audio(
         return Err("record seconds must be > 0".to_string());
     }
     let output = Command::new(python_cmd)
+        .current_dir(project_root())
         .args([
             "src/wow_fishing_bot.py",
             "--config",
@@ -115,6 +141,7 @@ fn capture_bobber(
         return Err("capture timeout must be > 0".to_string());
     }
     let output = Command::new(python_cmd)
+        .current_dir(project_root())
         .args([
             "src/wow_fishing_bot.py",
             "--config",
@@ -125,6 +152,51 @@ fn capture_bobber(
             "--capture-out",
             &output_path,
             "--capture-timeout",
+            &timeout.to_string(),
+        ])
+        .output()
+        .map_err(|err| err.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut combined = String::new();
+    if !stdout.trim().is_empty() {
+        combined.push_str(stdout.trim());
+    }
+    if !stderr.trim().is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(stderr.trim());
+    }
+    if !output.status.success() {
+        return Err(combined.trim().to_string());
+    }
+    Ok(combined.trim().to_string())
+}
+
+#[tauri::command]
+fn capture_region(
+    python_cmd: String,
+    config_path: String,
+    timeout: f32,
+) -> Result<String, String> {
+    if python_cmd.trim().is_empty() {
+        return Err("python command is empty".to_string());
+    }
+    if config_path.trim().is_empty() {
+        return Err("config path is empty".to_string());
+    }
+    if timeout <= 0.0 {
+        return Err("region timeout must be > 0".to_string());
+    }
+    let output = Command::new(python_cmd)
+        .current_dir(project_root())
+        .args([
+            "src/wow_fishing_bot.py",
+            "--config",
+            &config_path,
+            "--capture-region",
+            "--region-timeout",
             &timeout.to_string(),
         ])
         .output()
@@ -166,7 +238,9 @@ fn start_bot(
         return Err("bot already running".to_string());
     }
 
+    let root = project_root();
     let mut cmd = Command::new(python_cmd);
+    cmd.current_dir(&root);
     cmd.args(["src/wow_fishing_bot.py", "--config", &config_path]);
     if once {
         cmd.arg("--once");
@@ -250,6 +324,7 @@ fn main() {
             list_audio_devices,
             record_audio,
             capture_bobber,
+            capture_region,
             start_bot,
             stop_bot
         ])

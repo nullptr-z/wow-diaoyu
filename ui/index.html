@@ -198,6 +198,7 @@
                 <label class="field">
                   <span>Region left</span>
                   <input
+                    id="region-left"
                     type="number"
                     step="1"
                     data-type="int"
@@ -207,6 +208,7 @@
                 <label class="field">
                   <span>Region top</span>
                   <input
+                    id="region-top"
                     type="number"
                     step="1"
                     data-type="int"
@@ -216,6 +218,7 @@
                 <label class="field">
                   <span>Region width</span>
                   <input
+                    id="region-width"
                     type="number"
                     step="1"
                     data-type="int"
@@ -225,12 +228,18 @@
                 <label class="field">
                   <span>Region height</span>
                   <input
+                    id="region-height"
                     type="number"
                     step="1"
                     data-type="int"
                     data-path="vision.search_region.height"
                   />
                 </label>
+              </div>
+              <div class="button-row single">
+                <button id="pick-region-btn">Pick region (2 clicks)</button>
+              </div>
+              <div class="grid">
               </div>
             </section>
 
