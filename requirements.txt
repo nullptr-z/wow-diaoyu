@@ -3,3 +3,4 @@ sounddevice
 opencv-python
 mss
 pynput
+pyaudiowpatch

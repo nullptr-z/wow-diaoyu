@@ -49,22 +49,7 @@ echo.
 
 :: --- 打包 ---
 echo [打包] 开始构建 EXE...
-pyinstaller ^
-    --name WowFishingBot ^
-    --onefile ^
-    --console ^
-    --add-data "config.example.json;." ^
-    --add-data "assets;assets" ^
-    --hidden-import numpy ^
-    --hidden-import cv2 ^
-    --hidden-import sounddevice ^
-    --hidden-import _sounddevice_data ^
-    --hidden-import mss ^
-    --hidden-import pynput ^
-    --hidden-import pynput.keyboard._win32 ^
-    --hidden-import pynput.mouse._win32 ^
-    --collect-all sounddevice ^
-    src\wow_fishing_bot.py
+pyinstaller --name WowFishingBot --onefile --console --add-data "config.example.json;." --add-data "assets;assets" --hidden-import numpy --hidden-import cv2 --hidden-import sounddevice --hidden-import _sounddevice_data --hidden-import mss --hidden-import pynput --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 --collect-all sounddevice src\wow_fishing_bot.py
 
 if %errorlevel% neq 0 (
     echo.

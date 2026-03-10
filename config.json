@@ -8,8 +8,8 @@
     "freq_band_hz": 300,
     "ratio_threshold": 0.35,
     "consecutive_hits": 2,
-    "wasapi_loopback": false,
-    "device": null
+    "wasapi_loopback": true,
+    "device": 10
   },
   "vision": {
     "template_path": "assets/bobber_template.png",

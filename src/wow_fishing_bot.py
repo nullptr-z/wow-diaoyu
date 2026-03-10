@@ -79,17 +79,26 @@ def parse_key(key_name):
     return SPECIAL_KEYS.get(key_name, key_name)
 
 
-def build_wasapi_settings(enabled):
-    if not enabled:
-        return None
-    if hasattr(sd, "WasapiSettings"):
-        try:
-            return sd.WasapiSettings(loopback=True)
-        except Exception as exc:
-            print(f"[audio] WASAPI loopback unavailable: {exc}")
-            return None
-    print("[audio] WASAPI loopback not supported on this platform")
-    return None
+def _find_pyaudio_loopback():
+    """Find a WASAPI loopback device using pyaudiowpatch."""
+    try:
+        import pyaudiowpatch as pyaudio
+    except ImportError:
+        return None, None, None
+    p = pyaudio.PyAudio()
+    try:
+        wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+    except OSError:
+        p.terminate()
+        return None, None, None
+    default_out = p.get_device_info_by_index(wasapi["defaultOutputDevice"])
+    for i in range(p.get_device_count()):
+        dev = p.get_device_info_by_index(i)
+        if dev.get("isLoopbackDevice") and default_out["name"] in dev["name"]:
+            print(f"[audio] found WASAPI loopback: {dev['name']}")
+            return p, dev, pyaudio
+    p.terminate()
+    return None, None, None
 
 
 @dataclass
@@ -119,22 +128,70 @@ class AudioDetector:
     def start(self):
         if self.stream is not None:
             return
-        extra_settings = build_wasapi_settings(self.config.wasapi_loopback)
-        self.stream = sd.InputStream(
-            samplerate=self.config.sample_rate,
-            blocksize=self.config.fft_size,
-            channels=1,
-            callback=self._callback,
-            device=self.config.device,
-            extra_settings=extra_settings,
+        if self.config.wasapi_loopback:
+            self._start_loopback()
+        else:
+            self.stream = sd.InputStream(
+                samplerate=self.config.sample_rate,
+                blocksize=self.config.fft_size,
+                channels=1,
+                callback=self._callback,
+                device=self.config.device,
+            )
+            self.stream.start()
+
+    def _start_loopback(self):
+        p, dev, pyaudio = _find_pyaudio_loopback()
+        if p is None:
+            raise RuntimeError(
+                "WASAPI loopback not available. Install pyaudiowpatch:\n"
+                "  pip install pyaudiowpatch"
+            )
+        self._pyaudio = p
+        self._loopback_running = True
+        self.stream = p.open(
+            format=pyaudio.paFloat32,
+            channels=dev["maxInputChannels"],
+            rate=int(dev["defaultSampleRate"]),
+            input=True,
+            input_device_index=dev["index"],
+            frames_per_buffer=self.config.fft_size,
         )
-        self.stream.start()
+        self._loopback_channels = dev["maxInputChannels"]
+        self._loopback_rate = int(dev["defaultSampleRate"])
+        self._loopback_thread = threading.Thread(target=self._loopback_reader, daemon=True)
+        self._loopback_thread.start()
+
+    def _loopback_reader(self):
+        while self._loopback_running:
+            try:
+                raw = self.stream.read(self.config.fft_size, exception_on_overflow=False)
+                data = np.frombuffer(raw, dtype=np.float32)
+                if self._loopback_channels > 1:
+                    data = data.reshape(-1, self._loopback_channels)[:, 0]
+                if self._loopback_rate != self.config.sample_rate:
+                    ratio = self.config.sample_rate / self._loopback_rate
+                    new_len = int(len(data) * ratio)
+                    indices = np.linspace(0, len(data) - 1, new_len).astype(int)
+                    data = data[indices]
+                self._callback(data.reshape(-1, 1), None, None, None)
+            except Exception:
+                if self._loopback_running:
+                    continue
+                break
 
     def stop(self):
         if self.stream is None:
             return
-        self.stream.stop()
-        self.stream.close()
+        if hasattr(self, '_loopback_running'):
+            self._loopback_running = False
+            self._loopback_thread.join(timeout=2)
+            self.stream.stop_stream()
+            self.stream.close()
+            self._pyaudio.terminate()
+        else:
+            self.stream.stop()
+            self.stream.close()
         self.stream = None
 
     def flush(self):
@@ -176,21 +233,60 @@ class AudioDetector:
         return self.hit_count >= self.config.consecutive_hits
 
 
+def _record_loopback(config: AudioConfig, seconds: float):
+    p, dev, pyaudio = _find_pyaudio_loopback()
+    if p is None:
+        raise RuntimeError(
+            "WASAPI loopback not available. Install pyaudiowpatch:\n"
+            "  pip install pyaudiowpatch"
+        )
+    channels = dev["maxInputChannels"]
+    rate = int(dev["defaultSampleRate"])
+    stream = p.open(
+        format=pyaudio.paFloat32,
+        channels=channels,
+        rate=rate,
+        input=True,
+        input_device_index=dev["index"],
+        frames_per_buffer=config.fft_size,
+    )
+    total_frames = int(seconds * rate)
+    chunks = []
+    read = 0
+    while read < total_frames:
+        n = min(config.fft_size, total_frames - read)
+        raw = stream.read(n, exception_on_overflow=False)
+        chunks.append(np.frombuffer(raw, dtype=np.float32))
+        read += n
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+    data = np.concatenate(chunks)
+    if channels > 1:
+        data = data.reshape(-1, channels)[:, 0]
+    if rate != config.sample_rate:
+        new_len = int(len(data) * config.sample_rate / rate)
+        indices = np.linspace(0, len(data) - 1, new_len).astype(int)
+        data = data[indices]
+    return data.reshape(-1, 1)
+
+
 def record_audio(config: AudioConfig, seconds: float, output_path: str):
     if seconds <= 0:
         raise ValueError("record seconds must be > 0")
-    frames = max(1, int(seconds * config.sample_rate))
-    extra_settings = build_wasapi_settings(config.wasapi_loopback)
     print(f"[record] start {seconds:.1f}s at {config.sample_rate} Hz")
-    data = sd.rec(
-        frames,
-        samplerate=config.sample_rate,
-        channels=1,
-        dtype="float32",
-        device=config.device,
-        blocking=True,
-        extra_settings=extra_settings,
-    )
+    if config.wasapi_loopback:
+        data = _record_loopback(config, seconds)
+    else:
+        frames = max(1, int(seconds * config.sample_rate))
+        data = sd.rec(
+            frames,
+            samplerate=config.sample_rate,
+            channels=1,
+            dtype="float32",
+            device=config.device,
+            blocking=True,
+        )
     data = np.clip(data, -1.0, 1.0)
     pcm = (data * 32767).astype(np.int16)
     folder = os.path.dirname(output_path)
