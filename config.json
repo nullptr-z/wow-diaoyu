@@ -19,7 +19,7 @@
       "width": 800,
       "height": 600
     },
-    "match_threshold": 0.75
+    "match_threshold": 0.5
   },
   "click": {
     "move_delay_sec": 0.05,

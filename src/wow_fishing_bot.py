@@ -4,10 +4,15 @@ import copy
 import json
 import os
 import queue
+import sys
 import threading
 import time
 import wave
 from dataclasses import dataclass
+
+# Force line-buffered stdout so logs appear in real time when piped
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 import cv2
 import numpy as np
@@ -19,6 +24,7 @@ from pynput.mouse import Button, Controller as MouseController, Listener as Mous
 DEFAULT_CONFIG = {
     "cast_key": "1",
     "cast_delay_sec": 1.5,
+    "loot_delay_sec": 2.5,
     "audio": {
         "sample_rate": 44100,
         "fft_size": 2048,
@@ -37,7 +43,7 @@ DEFAULT_CONFIG = {
             "width": 800,
             "height": 600,
         },
-        "match_threshold": 0.75,
+        "match_threshold": 0.55,
     },
     "click": {
         "move_delay_sec": 0.05,
@@ -46,6 +52,7 @@ DEFAULT_CONFIG = {
     "loop": {
         "idle_sleep_sec": 0.05,
         "max_wait_sec": 25,
+        "min_listen_sec": 4.0,
     },
 }
 
@@ -77,6 +84,12 @@ SPECIAL_KEYS = {
 def parse_key(key_name):
     key_name = key_name.strip().lower()
     return SPECIAL_KEYS.get(key_name, key_name)
+
+
+def _float_or(value, default):
+    if value == "" or value is None:
+        return float(default)
+    return float(value)
 
 
 def _find_pyaudio_loopback():
@@ -128,9 +141,15 @@ class AudioDetector:
     def start(self):
         if self.stream is not None:
             return
+        print(f"[audio] config: rate={self.config.sample_rate}, fft={self.config.fft_size}, "
+              f"target={self.config.freq_target_hz}Hz, band={self.config.freq_band_hz}Hz, "
+              f"threshold={self.config.ratio_threshold}, hits={self.config.consecutive_hits}, "
+              f"loopback={self.config.wasapi_loopback}, device={self.config.device}")
         if self.config.wasapi_loopback:
+            print("[audio] starting WASAPI loopback...")
             self._start_loopback()
         else:
+            print(f"[audio] starting sounddevice InputStream, device={self.config.device}")
             self.stream = sd.InputStream(
                 samplerate=self.config.sample_rate,
                 blocksize=self.config.fft_size,
@@ -139,6 +158,7 @@ class AudioDetector:
                 device=self.config.device,
             )
             self.stream.start()
+        print("[audio] stream started OK")
 
     def _start_loopback(self):
         p, dev, pyaudio = _find_pyaudio_loopback()
@@ -147,6 +167,7 @@ class AudioDetector:
                 "WASAPI loopback not available. Install pyaudiowpatch:\n"
                 "  pip install pyaudiowpatch"
             )
+        print(f"[audio] loopback device: {dev['name']}, channels={dev['maxInputChannels']}, rate={int(dev['defaultSampleRate'])}")
         self._pyaudio = p
         self._loopback_running = True
         self.stream = p.open(
@@ -163,6 +184,7 @@ class AudioDetector:
             self._loopback_read_size = int(
                 np.ceil(self.config.fft_size * self._loopback_rate / self.config.sample_rate)
             )
+            print(f"[audio] resampling: loopback rate {self._loopback_rate} → config rate {self.config.sample_rate}")
         else:
             self._loopback_read_size = self.config.fft_size
         self._loopback_thread = threading.Thread(target=self._loopback_reader, daemon=True)
@@ -199,12 +221,15 @@ class AudioDetector:
         self.stream = None
 
     def flush(self):
+        flushed = 0
         while True:
             try:
                 self.queue.get_nowait()
+                flushed += 1
             except queue.Empty:
                 break
         self.hit_count = 0
+        print(f"[audio] flushed {flushed} chunks, hit_count reset")
 
     def _callback(self, indata, frames, time_info, status):
         if status:
@@ -224,15 +249,27 @@ class AudioDetector:
         total_energy = np.mean(magnitude) + 1e-9
         return band_energy / total_energy
 
-    def poll_hook(self, timeout_sec):
+    def poll_score(self, timeout_sec):
+        """Get the score of the next audio chunk, or None if no data."""
+        try:
+            chunk = self.queue.get(timeout=timeout_sec)
+        except queue.Empty:
+            return None
+        return self._score_chunk(chunk)
+
+    def poll_hook(self, timeout_sec, threshold_override=None):
+        threshold = threshold_override if threshold_override is not None else self.config.ratio_threshold
         try:
             chunk = self.queue.get(timeout=timeout_sec)
         except queue.Empty:
             return False
         score = self._score_chunk(chunk)
-        if score >= self.config.ratio_threshold:
+        if score >= threshold:
             self.hit_count += 1
+            print(f"[audio] score={score:.3f} >= {threshold:.3f} → hit {self.hit_count}/{self.config.consecutive_hits}")
         else:
+            if self.hit_count > 0:
+                print(f"[audio] score={score:.3f} < {threshold:.3f} → hit_count reset (was {self.hit_count})")
             self.hit_count = 0
         return self.hit_count >= self.config.consecutive_hits
 
@@ -412,16 +449,36 @@ class VisionLocator:
         print(f"[vision] template size: {self.template_w}x{self.template_h}")
         frame = np.array(self.sct.grab(region))
         gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-        result = cv2.matchTemplate(gray, self.template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(result)
-        print(f"[vision] best match: score={max_val:.4f}, pos={max_loc}, threshold={self.config.match_threshold}")
-        if max_val < self.config.match_threshold:
-            print(f"[vision] REJECTED: score {max_val:.4f} < threshold {self.config.match_threshold}")
+
+        # Multi-scale template matching: try scales from 0.7x to 1.3x
+        best_val = -1
+        best_loc = None
+        best_tw = self.template_w
+        best_th = self.template_h
+        for scale in (0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3):
+            tw = int(self.template_w * scale)
+            th = int(self.template_h * scale)
+            if tw < 10 or th < 10 or tw >= gray.shape[1] or th >= gray.shape[0]:
+                continue
+            scaled = cv2.resize(self.template, (tw, th), interpolation=cv2.INTER_AREA)
+            result = cv2.matchTemplate(gray, scaled, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            if max_val > best_val:
+                best_val = max_val
+                best_loc = max_loc
+                best_tw = tw
+                best_th = th
+                best_scale = scale
+
+        print(f"[vision] best match: score={best_val:.4f}, pos={best_loc}, "
+              f"scale={best_scale:.1f}x, threshold={self.config.match_threshold}")
+        if best_val < self.config.match_threshold:
+            print(f"[vision] REJECTED: score {best_val:.4f} < threshold {self.config.match_threshold}")
             return None
-        x = region["left"] + max_loc[0] + self.template_w // 2
-        y = region["top"] + max_loc[1] + self.template_h // 2
+        x = region["left"] + best_loc[0] + best_tw // 2
+        y = region["top"] + best_loc[1] + best_th // 2
         print(f"[vision] MATCHED: clicking at ({x}, {y})")
-        return (x, y, max_val)
+        return (x, y, best_val)
 
 
 class InputController:
@@ -463,9 +520,12 @@ class FishingBot:
             config["click"]["move_delay_sec"],
             config["click"]["post_click_delay_sec"],
         )
-        self.cast_delay_sec = config["cast_delay_sec"]
-        self.max_wait_sec = config["loop"]["max_wait_sec"]
-        self.idle_sleep_sec = config["loop"]["idle_sleep_sec"]
+        defaults = DEFAULT_CONFIG
+        self.cast_delay_sec = _float_or(config["cast_delay_sec"], defaults["cast_delay_sec"])
+        self.loot_delay_sec = _float_or(config.get("loot_delay_sec", 2.5), defaults["loot_delay_sec"])
+        self.max_wait_sec = _float_or(config["loop"]["max_wait_sec"], defaults["loop"]["max_wait_sec"])
+        self.idle_sleep_sec = _float_or(config["loop"]["idle_sleep_sec"], defaults["loop"]["idle_sleep_sec"])
+        self.min_listen_sec = _float_or(config["loop"].get("min_listen_sec", 4.0), defaults["loop"]["min_listen_sec"])
 
     def run(self, once=False, countdown=5):
         print(f"[bot] starting in {countdown} seconds, switch to game window now!")
@@ -474,23 +534,62 @@ class FishingBot:
             time.sleep(1)
         self.audio.start()
         print("[bot] started, press Ctrl+C to stop.")
+        cast_count = 0
         try:
             while True:
-                print("[bot] cast")
+                cast_count += 1
+                print(f"[bot] ===== cast #{cast_count} =====")
                 self.input.cast()
+                print(f"[bot] key pressed, waiting {self.cast_delay_sec:.1f}s for bobber to land...")
                 time.sleep(self.cast_delay_sec)
                 self.audio.flush()
 
-                deadline = time.monotonic() + self.max_wait_sec
+                min_listen = self.min_listen_sec
+                print(f"[bot] listening for hook sound (min {min_listen:.1f}s, max {self.max_wait_sec}s)...")
+                listen_start = time.monotonic()
+                deadline = listen_start + self.max_wait_sec
                 hooked = False
+                poll_count = 0
+                baseline_scores = []
+                baseline_mean = 0.0
+                baseline_ready = False
                 while time.monotonic() < deadline:
-                    if self.audio.poll_hook(timeout_sec=0.25):
-                        hooked = True
-                        break
+                    poll_count += 1
+                    elapsed = time.monotonic() - listen_start
+
+                    # During min_listen, collect baseline scores instead of checking for hook
+                    if elapsed < min_listen:
+                        score = self.audio.poll_score(timeout_sec=0.25)
+                        if score is not None:
+                            baseline_scores.append(score)
+                    else:
+                        # Calculate baseline once when min_listen expires
+                        if not baseline_ready:
+                            if baseline_scores:
+                                baseline_mean = np.mean(baseline_scores)
+                                baseline_std = np.std(baseline_scores)
+                                # Dynamic threshold: baseline + 2*std, but at least the configured threshold
+                                dynamic_threshold = max(
+                                    self.audio.config.ratio_threshold,
+                                    baseline_mean + max(2.0 * baseline_std, 0.1),
+                                )
+                            else:
+                                dynamic_threshold = self.audio.config.ratio_threshold
+                            baseline_ready = True
+                            print(f"[audio] baseline: mean={baseline_mean:.3f}, "
+                                  f"dynamic_threshold={dynamic_threshold:.3f} "
+                                  f"(from {len(baseline_scores)} samples)")
+                            self.audio.hit_count = 0
+
+                        if self.audio.poll_hook(timeout_sec=0.25, threshold_override=dynamic_threshold):
+                            print(f"[audio] HOOK TRIGGERED after {elapsed:.1f}s ({poll_count} polls)")
+                            hooked = True
+                            break
                     time.sleep(self.idle_sleep_sec)
 
                 if not hooked:
-                    print("[bot] no hook detected, recast")
+                    elapsed = time.monotonic() - listen_start
+                    print(f"[bot] no hook detected after {elapsed:.1f}s ({poll_count} polls), recast")
                     if once:
                         return
                     continue
@@ -499,6 +598,8 @@ class FishingBot:
                 match = self.vision.find()
                 if match is None:
                     print("[bot] hook detected, but no bobber match — skipping click, recast")
+                    print(f"[bot] cooldown {self.cast_delay_sec:.1f}s to avoid spam")
+                    time.sleep(self.cast_delay_sec)
                     if once:
                         return
                     continue
@@ -506,7 +607,8 @@ class FishingBot:
                 x, y, score = match
                 print(f"[bot] click at ({x}, {y}), score={score:.3f}")
                 self.input.click(x, y)
-                print("[bot] click done, waiting before next cast")
+                print(f"[bot] waiting {self.loot_delay_sec:.1f}s for loot pickup")
+                time.sleep(self.loot_delay_sec)
                 if once:
                     return
         except KeyboardInterrupt:
