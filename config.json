@@ -1,6 +1,7 @@
 {
   "cast_key": "1",
   "cast_delay_sec": 1.5,
+  "loot_delay_sec": "",
   "audio": {
     "sample_rate": 44100,
     "fft_size": 2048,
@@ -8,18 +9,29 @@
     "freq_band_hz": 300,
     "ratio_threshold": 0.35,
     "consecutive_hits": 2,
-    "wasapi_loopback": true,
-    "device": 10
+    "device": 10,
+    "spike_factor": 2,
+    "spike_window": 20,
+    "wasapi_loopback": true
   },
   "vision": {
     "template_path": "assets/bobber_template.png",
+    "match_threshold": 0.5,
     "search_region": {
       "left": 200,
       "top": 200,
       "width": 800,
       "height": 600
     },
-    "match_threshold": 0.5
+    "orb_min_matches": 6,
+    "glow_brightness_threshold": 200,
+    "glow_ratio_threshold": 0.15,
+    "blacklist_threshold": 0.6,
+    "use_edge_detection": true,
+    "use_orb": true,
+    "glow_check": false,
+    "extra_templates": [],
+    "blacklist_templates": []
   },
   "click": {
     "move_delay_sec": 0.05,
@@ -27,6 +39,7 @@
   },
   "loop": {
     "idle_sleep_sec": 0.05,
-    "max_wait_sec": 25
+    "max_wait_sec": 25,
+    "min_listen_sec": ""
   }
 }

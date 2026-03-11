@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import wave
+from collections import deque
 from dataclasses import dataclass
 
 # Force line-buffered stdout so logs appear in real time when piped
@@ -34,9 +35,12 @@ DEFAULT_CONFIG = {
         "consecutive_hits": 2,
         "wasapi_loopback": False,
         "device": None,
+        "spike_factor": 2.0,
+        "spike_window": 20,
     },
     "vision": {
         "template_path": "assets/bobber_template.png",
+        "extra_templates": [],
         "search_region": {
             "left": 200,
             "top": 200,
@@ -44,6 +48,14 @@ DEFAULT_CONFIG = {
             "height": 600,
         },
         "match_threshold": 0.55,
+        "use_edge_detection": True,
+        "use_orb": True,
+        "orb_min_matches": 6,
+        "glow_check": False,
+        "glow_brightness_threshold": 200,
+        "glow_ratio_threshold": 0.15,
+        "blacklist_templates": [],
+        "blacklist_threshold": 0.6,
     },
     "click": {
         "move_delay_sec": 0.05,
@@ -124,6 +136,8 @@ class AudioConfig:
     consecutive_hits: int
     wasapi_loopback: bool
     device: int | None
+    spike_factor: float = 2.0
+    spike_window: int = 20
 
 
 class AudioDetector:
@@ -137,6 +151,7 @@ class AudioDetector:
         high = config.freq_target_hz + config.freq_band_hz / 2
         self.band_mask = (self.freqs >= low) & (self.freqs <= high)
         self.hit_count = 0
+        self.recent_scores = deque(maxlen=config.spike_window)
 
     def start(self):
         if self.stream is not None:
@@ -229,6 +244,7 @@ class AudioDetector:
             except queue.Empty:
                 break
         self.hit_count = 0
+        self.recent_scores.clear()
         print(f"[audio] flushed {flushed} chunks, hit_count reset")
 
     def _callback(self, indata, frames, time_info, status):
@@ -264,9 +280,23 @@ class AudioDetector:
         except queue.Empty:
             return False
         score = self._score_chunk(chunk)
-        if score >= threshold:
+
+        # Spike detection: score must also be a significant spike above recent history
+        is_spike = True
+        if self.config.spike_factor > 0 and len(self.recent_scores) >= 3:
+            recent_mean = np.mean(self.recent_scores)
+            recent_std = max(np.std(self.recent_scores), 0.01)
+            spike_threshold = recent_mean + self.config.spike_factor * recent_std
+            is_spike = score >= spike_threshold
+            if score >= threshold and not is_spike:
+                print(f"[audio] score={score:.3f} >= {threshold:.3f} but NOT a spike "
+                      f"(need {spike_threshold:.3f}, recent_mean={recent_mean:.3f})")
+
+        self.recent_scores.append(score)
+
+        if score >= threshold and is_spike:
             self.hit_count += 1
-            print(f"[audio] score={score:.3f} >= {threshold:.3f} → hit {self.hit_count}/{self.config.consecutive_hits}")
+            print(f"[audio] score={score:.3f} >= {threshold:.3f} (spike OK) → hit {self.hit_count}/{self.config.consecutive_hits}")
         else:
             if self.hit_count > 0:
                 print(f"[audio] score={score:.3f} < {threshold:.3f} → hit_count reset (was {self.hit_count})")
@@ -363,23 +393,88 @@ def wait_for_click(timeout_sec):
 
 
 def capture_region(timeout_sec: float):
-    """Wait for two clicks (top-left, bottom-right) and return the region."""
-    if timeout_sec <= 0:
-        raise ValueError("capture timeout must be > 0")
-    print(f"[region] click TOP-LEFT corner within {timeout_sec:.1f}s")
-    x1, y1 = wait_for_click(timeout_sec)
-    print(f"[region] got top-left: ({x1}, {y1})")
-    print(f"[region] now click BOTTOM-RIGHT corner within {timeout_sec:.1f}s")
-    x2, y2 = wait_for_click(timeout_sec)
-    print(f"[region] got bottom-right: ({x2}, {y2})")
-    left = min(x1, x2)
-    top = min(y1, y2)
-    width = abs(x2 - x1)
-    height = abs(y2 - y1)
-    if width <= 0 or height <= 0:
-        raise ValueError("region has zero area — two clicks are at the same position")
-    print(f"[region] result: left={left}, top={top}, width={width}, height={height}")
-    return {"left": left, "top": top, "width": width, "height": height}
+    """Show a fullscreen transparent overlay and let user drag to select a region."""
+    import tkinter as tk
+
+    result = {}
+
+    root = tk.Tk()
+    root.attributes("-topmost", True)
+    root.overrideredirect(True)
+
+    # Fullscreen
+    sw = root.winfo_screenwidth()
+    sh = root.winfo_screenheight()
+    root.geometry(f"{sw}x{sh}+0+0")
+
+    # Semi-transparent overlay
+    if sys.platform == "darwin":
+        root.attributes("-transparent", True)
+        root.config(bg="systemTransparent")
+        canvas = tk.Canvas(root, width=sw, height=sh, highlightthickness=0, bg="systemTransparent")
+        # Draw a semi-transparent dark overlay using stipple
+        canvas.create_rectangle(0, 0, sw, sh, fill="gray", stipple="gray25", outline="")
+    else:
+        root.attributes("-alpha", 0.3)
+        root.config(bg="black")
+        canvas = tk.Canvas(root, width=sw, height=sh, highlightthickness=0, bg="black")
+
+    canvas.pack(fill=tk.BOTH, expand=True)
+
+    # Instruction text
+    canvas.create_text(
+        sw // 2, 40,
+        text="拖拽鼠标框选区域，松开确认，ESC 取消",
+        fill="white", font=("sans-serif", 18, "bold"),
+    )
+
+    start_x = 0
+    start_y = 0
+    rect_id = None
+
+    def on_press(event):
+        nonlocal start_x, start_y, rect_id
+        start_x = event.x
+        start_y = event.y
+        if rect_id:
+            canvas.delete(rect_id)
+        rect_id = canvas.create_rectangle(
+            start_x, start_y, start_x, start_y,
+            outline="red", width=2,
+        )
+
+    def on_drag(event):
+        nonlocal rect_id
+        if rect_id:
+            canvas.coords(rect_id, start_x, start_y, event.x, event.y)
+
+    def on_release(event):
+        x1, y1 = start_x, start_y
+        x2, y2 = event.x, event.y
+        left = min(x1, x2)
+        top = min(y1, y2)
+        width = abs(x2 - x1)
+        height = abs(y2 - y1)
+        if width > 5 and height > 5:
+            result["region"] = {"left": left, "top": top, "width": width, "height": height}
+        root.destroy()
+
+    def on_escape(event):
+        root.destroy()
+
+    canvas.bind("<ButtonPress-1>", on_press)
+    canvas.bind("<B1-Motion>", on_drag)
+    canvas.bind("<ButtonRelease-1>", on_release)
+    root.bind("<Escape>", on_escape)
+
+    root.mainloop()
+
+    if "region" not in result:
+        raise ValueError("region selection cancelled")
+
+    region = result["region"]
+    print(f"[region] result: left={region['left']}, top={region['top']}, width={region['width']}, height={region['height']}")
+    return region
 
 
 def capture_bobber(size: int, output_path: str, timeout_sec: float):
@@ -421,46 +516,99 @@ def capture_bobber(size: int, output_path: str, timeout_sec: float):
 @dataclass
 class VisionConfig:
     template_path: str
+    extra_templates: list
     search_left: int
     search_top: int
     search_width: int
     search_height: int
     match_threshold: float
+    use_edge_detection: bool
+    use_orb: bool
+    orb_min_matches: int
+    glow_check: bool
+    glow_brightness_threshold: int
+    glow_ratio_threshold: float
+    blacklist_templates: list
+    blacklist_threshold: float
 
 
 class VisionLocator:
     def __init__(self, config: VisionConfig):
         self.config = config
+        self.sct = mss()
+        # Load primary template
         self.template = cv2.imread(config.template_path, cv2.IMREAD_GRAYSCALE)
         if self.template is None:
             raise FileNotFoundError(f"template not found: {config.template_path}")
         self.template_h, self.template_w = self.template.shape
-        self.sct = mss()
+        # Build list of all templates (primary + extras for different angles/views)
+        self.templates = [(config.template_path, self.template)]
+        for path in config.extra_templates:
+            tmpl = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+            if tmpl is None:
+                print(f"[vision] WARNING: extra template not found: {path}")
+            else:
+                self.templates.append((path, tmpl))
+                print(f"[vision] loaded extra template: {path}")
+        print(f"[vision] {len(self.templates)} bobber template(s) loaded")
+        # Precompute edge templates for edge-based matching
+        if config.use_edge_detection:
+            self.templates_edges = [(p, cv2.Canny(t, 50, 150)) for p, t in self.templates]
+            print(f"[vision] edge detection enabled")
+        else:
+            self.templates_edges = None
+        # Precompute ORB keypoints and descriptors for feature matching
+        if config.use_orb:
+            self.orb = cv2.ORB_create(nfeatures=500)
+            self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+            self.templates_orb = []
+            for path, tmpl in self.templates:
+                kp, des = self.orb.detectAndCompute(tmpl, None)
+                if des is not None and len(kp) >= 2:
+                    th, tw = tmpl.shape[:2]
+                    self.templates_orb.append((path, kp, des, tw, th))
+                else:
+                    print(f"[vision] ORB: too few features in {path}, skipping")
+            print(f"[vision] ORB enabled ({len(self.templates_orb)} template(s) with features)")
+        else:
+            self.orb = None
+            self.templates_orb = []
+        # Load blacklist templates
+        self.blacklist = []
+        for path in config.blacklist_templates:
+            tmpl = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+            if tmpl is None:
+                print(f"[vision] WARNING: blacklist template not found: {path}")
+            else:
+                self.blacklist.append((path, tmpl))
+                print(f"[vision] loaded blacklist template: {path}")
+        if self.blacklist:
+            print(f"[vision] {len(self.blacklist)} blacklist template(s) loaded")
 
-    def find(self):
+    def _grab_region(self):
         region = {
             "left": self.config.search_left,
             "top": self.config.search_top,
             "width": self.config.search_width,
             "height": self.config.search_height,
         }
-        print(f"[vision] searching region: left={region['left']}, top={region['top']}, "
-              f"width={region['width']}, height={region['height']}")
-        print(f"[vision] template size: {self.template_w}x{self.template_h}")
         frame = np.array(self.sct.grab(region))
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        return region, frame
 
-        # Multi-scale template matching: try scales from 0.7x to 1.3x
+    def _multiscale_match(self, gray, template):
+        """Run multi-scale template matching, return (best_val, best_loc, best_tw, best_th, best_scale)."""
         best_val = -1
         best_loc = None
-        best_tw = self.template_w
-        best_th = self.template_h
+        best_tw = template.shape[1]
+        best_th = template.shape[0]
+        best_scale = 1.0
+        th_orig, tw_orig = template.shape[:2]
         for scale in (0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3):
-            tw = int(self.template_w * scale)
-            th = int(self.template_h * scale)
+            tw = int(tw_orig * scale)
+            th = int(th_orig * scale)
             if tw < 10 or th < 10 or tw >= gray.shape[1] or th >= gray.shape[0]:
                 continue
-            scaled = cv2.resize(self.template, (tw, th), interpolation=cv2.INTER_AREA)
+            scaled = cv2.resize(template, (tw, th), interpolation=cv2.INTER_AREA)
             result = cv2.matchTemplate(gray, scaled, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(result)
             if max_val > best_val:
@@ -469,16 +617,142 @@ class VisionLocator:
                 best_tw = tw
                 best_th = th
                 best_scale = scale
+        return best_val, best_loc, best_tw, best_th, best_scale
 
-        print(f"[vision] best match: score={best_val:.4f}, pos={best_loc}, "
-              f"scale={best_scale:.1f}x, threshold={self.config.match_threshold}")
-        if best_val < self.config.match_threshold:
-            print(f"[vision] REJECTED: score {best_val:.4f} < threshold {self.config.match_threshold}")
+    def _orb_match(self, gray):
+        """ORB feature matching across all templates. Returns (cx, cy, score, path) or None."""
+        if not self.orb or not self.templates_orb:
             return None
-        x = region["left"] + best_loc[0] + best_tw // 2
-        y = region["top"] + best_loc[1] + best_th // 2
-        print(f"[vision] MATCHED: clicking at ({x}, {y})")
-        return (x, y, best_val)
+        kp_scene, des_scene = self.orb.detectAndCompute(gray, None)
+        if des_scene is None or len(kp_scene) < 2:
+            return None
+
+        best_result = None
+        best_good_count = 0
+        for path, kp_tmpl, des_tmpl, tw, th in self.templates_orb:
+            matches = self.bf.knnMatch(des_tmpl, des_scene, k=2)
+            # Lowe's ratio test
+            good = []
+            for m_pair in matches:
+                if len(m_pair) == 2:
+                    m, n = m_pair
+                    if m.distance < 0.75 * n.distance:
+                        good.append(m)
+            if len(good) < self.config.orb_min_matches:
+                continue
+            if len(good) > best_good_count:
+                # Compute centroid of matched scene keypoints
+                pts = np.array([kp_scene[m.trainIdx].pt for m in good])
+                cx = int(np.mean(pts[:, 0]))
+                cy = int(np.mean(pts[:, 1]))
+                # Estimate bounding box from keypoint spread
+                spread_x = int(np.std(pts[:, 0]) * 2) or tw // 2
+                spread_y = int(np.std(pts[:, 1]) * 2) or th // 2
+                # Score: ratio of good matches to template descriptors
+                score = len(good) / len(des_tmpl)
+                best_result = (cx, cy, spread_x, spread_y, score, path)
+                best_good_count = len(good)
+        return best_result
+
+    def _check_glow(self, gray, cx, cy, radius):
+        """Check for white glow ring around the matched bobber position."""
+        h, w = gray.shape
+        outer_r = int(radius * 1.5)
+        inner_r = radius
+        y_coords, x_coords = np.ogrid[:h, :w]
+        dist_sq = (x_coords - cx) ** 2 + (y_coords - cy) ** 2
+        ring_mask = (dist_sq >= inner_r ** 2) & (dist_sq <= outer_r ** 2)
+        ring_pixels = gray[ring_mask]
+        if len(ring_pixels) == 0:
+            return 0.0
+        bright_ratio = np.mean(ring_pixels >= self.config.glow_brightness_threshold)
+        return bright_ratio
+
+    def find(self):
+        region, frame = self._grab_region()
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+
+        best_val = -1
+        best_loc = None
+        best_tw = self.template_w
+        best_th = self.template_h
+        best_scale = 1.0
+        match_mode = "grayscale"
+        match_tmpl = ""
+        threshold = self.config.match_threshold
+
+        # Phase 1: grayscale template matching — early exit if score is high enough
+        for path, tmpl in self.templates:
+            g_val, g_loc, g_tw, g_th, g_scale = self._multiscale_match(gray, tmpl)
+            if g_val > best_val:
+                best_val, best_loc, best_tw, best_th, best_scale = g_val, g_loc, g_tw, g_th, g_scale
+                match_mode = "grayscale"
+                match_tmpl = path
+            if best_val >= threshold:
+                break  # good enough, skip remaining templates
+
+        # Phase 2: edge matching — only if grayscale didn't reach threshold
+        if best_val < threshold and self.templates_edges is not None:
+            gray_edges = cv2.Canny(gray, 50, 150)
+            for path, tmpl_edge in self.templates_edges:
+                e_val, e_loc, e_tw, e_th, e_scale = self._multiscale_match(gray_edges, tmpl_edge)
+                if e_val > best_val:
+                    best_val, best_loc, best_tw, best_th, best_scale = e_val, e_loc, e_tw, e_th, e_scale
+                    match_mode = "edge"
+                    match_tmpl = path
+                if best_val >= threshold:
+                    break
+
+        # Phase 3: ORB — only if template matching failed
+        local_cx, local_cy, glow_radius = None, None, 0
+        if best_val >= threshold:
+            local_cx = best_loc[0] + best_tw // 2
+            local_cy = best_loc[1] + best_th // 2
+            glow_radius = max(best_tw, best_th) // 2
+            final_score = best_val
+            final_mode = f"template/{match_mode}"
+            print(f"[vision] template match ({match_mode}, {os.path.basename(match_tmpl)}): "
+                  f"score={best_val:.4f}, scale={best_scale:.1f}x")
+        else:
+            orb_result = self._orb_match(gray)
+            if orb_result is not None:
+                local_cx, local_cy = orb_result[0], orb_result[1]
+                glow_radius = max(orb_result[2], orb_result[3])
+                final_score = orb_result[4]
+                final_mode = "orb"
+                print(f"[vision] ORB match ({os.path.basename(orb_result[5])}): "
+                      f"score={final_score:.3f}, pos=({local_cx},{local_cy})")
+            else:
+                print(f"[vision] REJECTED: no match (template best={best_val:.4f}, ORB=none)")
+                return None
+
+        # Glow check: verify white glow ring around bobber (own bobber has glow, others don't)
+        if self.config.glow_check:
+            glow_ratio = self._check_glow(gray, local_cx, local_cy, glow_radius)
+            print(f"[vision] glow check: bright_ratio={glow_ratio:.3f}, "
+                  f"threshold={self.config.glow_ratio_threshold}")
+            if glow_ratio < self.config.glow_ratio_threshold:
+                print(f"[vision] REJECTED: no glow detected (not own bobber?)")
+                return None
+
+        x = region["left"] + local_cx
+        y = region["top"] + local_cy
+        print(f"[vision] MATCHED ({final_mode}): clicking at ({x}, {y}), score={final_score:.3f}")
+        return (x, y, final_score)
+
+    def check_blacklist(self):
+        """Check if any blacklisted icon is visible in the search region. Returns matched path or None."""
+        if not self.blacklist:
+            return None
+        region, frame = self._grab_region()
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        for path, tmpl in self.blacklist:
+            result = cv2.matchTemplate(gray, tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val >= self.config.blacklist_threshold:
+                print(f"[vision] BLACKLIST HIT: {path} (score={max_val:.4f} >= {self.config.blacklist_threshold})")
+                return path
+        return None
 
 
 class InputController:
@@ -507,11 +781,20 @@ class FishingBot:
         audio_cfg = AudioConfig(**config["audio"])
         vision_cfg = VisionConfig(
             template_path=config["vision"]["template_path"],
+            extra_templates=config["vision"].get("extra_templates", []),
             search_left=config["vision"]["search_region"]["left"],
             search_top=config["vision"]["search_region"]["top"],
             search_width=config["vision"]["search_region"]["width"],
             search_height=config["vision"]["search_region"]["height"],
             match_threshold=config["vision"]["match_threshold"],
+            use_edge_detection=config["vision"].get("use_edge_detection", True),
+            use_orb=config["vision"].get("use_orb", True),
+            orb_min_matches=config["vision"].get("orb_min_matches", 6),
+            glow_check=config["vision"].get("glow_check", False),
+            glow_brightness_threshold=config["vision"].get("glow_brightness_threshold", 200),
+            glow_ratio_threshold=config["vision"].get("glow_ratio_threshold", 0.15),
+            blacklist_templates=config["vision"].get("blacklist_templates", []),
+            blacklist_threshold=config["vision"].get("blacklist_threshold", 0.6),
         )
         self.audio = AudioDetector(audio_cfg)
         self.vision = VisionLocator(vision_cfg)
@@ -542,6 +825,13 @@ class FishingBot:
                 self.input.cast()
                 print(f"[bot] key pressed, waiting {self.cast_delay_sec:.1f}s for bobber to land...")
                 time.sleep(self.cast_delay_sec)
+
+                # Blacklist check: recast if problematic icon detected (e.g. cursor overlapping bobber)
+                bl_hit = self.vision.check_blacklist()
+                if bl_hit is not None:
+                    print(f"[bot] blacklist icon detected ({bl_hit}), recasting...")
+                    continue
+
                 self.audio.flush()
 
                 min_listen = self.min_listen_sec
@@ -666,6 +956,22 @@ def parse_args():
         default=15.0,
         help="timeout per click when capturing region",
     )
+    parser.add_argument(
+        "--capture-blacklist",
+        action="store_true",
+        help="capture a blacklist template icon and exit",
+    )
+    parser.add_argument(
+        "--blacklist-size",
+        type=int,
+        default=48,
+        help="blacklist capture size in pixels",
+    )
+    parser.add_argument(
+        "--blacklist-out",
+        default="assets/blacklist_cursor.png",
+        help="blacklist capture output png path",
+    )
     parser.add_argument("--once", action="store_true", help="run only one loop")
     return parser.parse_args()
 
@@ -691,6 +997,14 @@ def main():
     if args.capture_bobber:
         try:
             capture_bobber(args.capture_size, args.capture_out, args.capture_timeout)
+        except Exception as exc:
+            print(f"[capture] error: {exc}")
+            raise SystemExit(1)
+        return
+    if args.capture_blacklist:
+        try:
+            capture_bobber(args.blacklist_size, args.blacklist_out, args.capture_timeout)
+            print(f"[blacklist] template saved. Add '{args.blacklist_out}' to config vision.blacklist_templates")
         except Exception as exc:
             print(f"[capture] error: {exc}")
             raise SystemExit(1)

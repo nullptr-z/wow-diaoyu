@@ -58,16 +58,17 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+:: --- 复制到 Tauri sidecar 目录 ---
+if not exist "src-tauri\binaries" mkdir "src-tauri\binaries"
+copy /Y "dist\WowFishingBot.exe" "src-tauri\binaries\WowFishingBot-x86_64-pc-windows-msvc.exe"
+
 echo.
 echo ============================================
 echo   打包完成！
-echo   EXE 文件: dist\WowFishingBot.exe
+echo   PyInstaller 产物: dist\WowFishingBot.exe
+echo   Tauri sidecar:    src-tauri\binaries\WowFishingBot-x86_64-pc-windows-msvc.exe
 echo.
-echo   使用方法:
-echo   1. 将 dist\WowFishingBot.exe 复制到任意目录
-echo   2. 同目录下放置 config.json 和 assets 文件夹
-echo   3. 双击运行或命令行运行:
-echo      WowFishingBot.exe --config config.json
+echo   下一步: 运行 'cargo tauri build' 构建完整应用
 echo ============================================
 echo.
 pause

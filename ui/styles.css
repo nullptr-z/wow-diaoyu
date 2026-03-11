@@ -6,8 +6,8 @@
   --accent-warm: #f29f3d;
   --panel: rgba(255, 255, 255, 0.82);
   --border: #dbcbb5;
-  --shadow: 0 20px 45px rgba(38, 47, 59, 0.15);
-  --radius: 18px;
+  --shadow: 0 8px 24px rgba(38, 47, 59, 0.1);
+  --radius: 12px;
 }
 
 * {
@@ -49,8 +49,8 @@ body {
 .app {
   position: relative;
   z-index: 1;
-  padding: 32px;
-  max-width: 1200px;
+  padding: 20px 24px;
+  max-width: 1500px;
   margin: 0 auto;
 }
 
@@ -58,8 +58,8 @@ body {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 24px;
+  gap: 16px;
+  margin-bottom: 16px;
   animation: float-in 700ms ease-out;
 }
 
@@ -73,24 +73,25 @@ body {
 
 .hero h1 {
   margin: 0;
-  font-size: clamp(28px, 3.2vw, 42px);
+  font-size: clamp(22px, 2.6vw, 32px);
 }
 
 .subtitle {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   color: var(--muted);
-  font-size: 16px;
+  font-size: 13px;
 }
 
 .status {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  gap: 8px;
+  padding: 6px 14px;
   border-radius: 999px;
   background: var(--panel);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
+  font-size: 13px;
 }
 
 .status .dot {
@@ -109,16 +110,16 @@ body {
 
 .content {
   display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 20px;
-  margin-bottom: 24px;
+  grid-template-columns: 280px 1fr 280px;
+  gap: 14px;
+  margin-bottom: 16px;
 }
 
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
+  padding: 14px 16px;
   box-shadow: var(--shadow);
   backdrop-filter: blur(12px);
   animation: float-in 800ms ease-out;
@@ -127,28 +128,28 @@ body {
 .controls {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
 
 .panel h2 {
-  margin: 0 0 14px;
-  font-size: 20px;
+  margin: 0 0 10px;
+  font-size: 16px;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 14px;
+  gap: 3px;
+  font-size: 12px;
   color: var(--muted);
 }
 
 .field input {
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
   border: 1px solid #d9d0c3;
   background: #fffaf2;
-  font-size: 15px;
+  font-size: 13px;
   color: var(--ink);
   transition: border 150ms ease, box-shadow 150ms ease;
 }
@@ -162,8 +163,8 @@ body {
 .checkbox {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 14px;
+  gap: 6px;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -172,14 +173,14 @@ body {
 }
 
 .checkbox input {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
 .button-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 6px;
 }
 
 .button-row.single {
@@ -187,18 +188,17 @@ body {
 }
 
 .section-label {
-  margin-top: 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
+  margin-top: 4px;
   font-size: 11px;
+  font-weight: 600;
   color: var(--muted);
 }
 
 button {
   border: none;
-  border-radius: 12px;
-  padding: 10px 14px;
-  font-size: 14px;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   background: #efe6d8;
@@ -241,13 +241,13 @@ button:disabled {
 .config {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
 }
 
 .group {
   border-top: 1px solid rgba(219, 203, 181, 0.6);
-  padding-top: 14px;
-  margin-top: 12px;
+  padding-top: 10px;
+  margin-top: 8px;
 }
 
 .group:first-of-type {
@@ -258,27 +258,29 @@ button:disabled {
 
 .group-title {
   font-weight: 700;
-  margin-bottom: 10px;
-  font-size: 16px;
+  margin-bottom: 6px;
+  font-size: 14px;
 }
 
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 16px;
+  gap: 8px 12px;
 }
 
 .logs {
-  max-height: 260px;
   display: flex;
   flex-direction: column;
+  position: sticky;
+  top: 20px;
+  max-height: calc(100vh - 100px);
 }
 
 .logs-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .log-meta {
@@ -289,13 +291,14 @@ button:disabled {
 #log-output {
   flex: 1;
   margin: 0;
-  padding: 14px;
+  padding: 10px;
   background: #0d1b22;
   color: #d6efe9;
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: auto;
   font-family: "Cascadia Mono", "Fira Code", "Menlo", monospace;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 @keyframes float-in {
@@ -306,6 +309,18 @@ button:disabled {
   to {
     transform: translateY(0);
     opacity: 1;
+  }
+}
+
+@media (max-width: 1100px) {
+  .content {
+    grid-template-columns: 280px 1fr;
+  }
+
+  .logs {
+    grid-column: 1 / -1;
+    position: static;
+    max-height: 300px;
   }
 }
 
@@ -336,4 +351,63 @@ button:disabled {
   .status {
     align-self: flex-start;
   }
+}
+
+/* List editor for template paths */
+.list-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.list-editor-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.list-editor-row input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+button.ghost.small {
+  padding: 2px 8px;
+  min-width: auto;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* Advanced collapsible section */
+details.advanced {
+  border-top: 1px solid rgba(219, 203, 181, 0.6);
+  padding-top: 10px;
+  margin-top: 8px;
+}
+
+details.advanced summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--muted);
+  list-style: none;
+  margin-bottom: 6px;
+}
+
+details.advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+details.advanced[open] summary {
+  color: var(--ink);
+}
+
+details.advanced .grid {
+  margin-top: 8px;
 }

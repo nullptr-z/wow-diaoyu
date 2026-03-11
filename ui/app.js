@@ -26,13 +26,51 @@ const statusDot = document.getElementById("status-dot");
 const statusLabel = document.getElementById("status-label");
 const logOutput = document.getElementById("log-output");
 const logMeta = document.getElementById("log-meta");
+const captureBlacklistBtn = document.getElementById("capture-blacklist-btn");
+const addExtraTemplateBtn = document.getElementById("add-extra-template-btn");
+const addBlacklistTemplateBtn = document.getElementById("add-blacklist-template-btn");
+const extraTemplatesList = document.getElementById("extra-templates-list");
+const blacklistTemplatesList = document.getElementById("blacklist-templates-list");
+const blacklistOutputInput = document.getElementById("blacklist-output");
+const blacklistSizeInput = document.getElementById("blacklist-size");
 const formInputs = Array.from(document.querySelectorAll("[data-path]"));
 
 const logLines = [];
 const settingsKey = "wow-fishing-ui-settings";
+let sidecarMode = false;
+
+// --- List editor helpers for extra_templates and blacklist_templates ---
+function renderListEditor(container, items, onChange) {
+  container.innerHTML = "";
+  items.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "list-editor-row";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = item;
+    input.addEventListener("change", () => {
+      items[index] = input.value;
+      onChange();
+    });
+    const removeBtn = document.createElement("button");
+    removeBtn.textContent = "\u00d7";
+    removeBtn.className = "ghost small";
+    removeBtn.addEventListener("click", () => {
+      items.splice(index, 1);
+      renderListEditor(container, items, onChange);
+      onChange();
+    });
+    row.appendChild(input);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  });
+}
+
+let extraTemplates = [];
+let blacklistTemplates = [];
 
 function setRunning(running) {
-  statusLabel.textContent = running ? "Running" : "Idle";
+  statusLabel.textContent = running ? "运行中" : "空闲";
   statusDot.classList.toggle("active", running);
   startBtn.disabled = running;
   stopBtn.disabled = !running;
@@ -41,7 +79,7 @@ function setRunning(running) {
 }
 
 function updateLogMeta() {
-  logMeta.textContent = `${logLines.length} lines`;
+  logMeta.textContent = `${logLines.length} 行`;
 }
 
 function appendLog(line) {
@@ -119,6 +157,11 @@ function fillForm(config) {
   formInputs.forEach((input) => {
     setInputValue(input, getByPath(config, input.dataset.path));
   });
+  // Fill list editors
+  extraTemplates = (getByPath(config, "vision.extra_templates") || []).slice();
+  blacklistTemplates = (getByPath(config, "vision.blacklist_templates") || []).slice();
+  renderListEditor(extraTemplatesList, extraTemplates, () => {});
+  renderListEditor(blacklistTemplatesList, blacklistTemplates, () => {});
 }
 
 function readForm() {
@@ -126,6 +169,9 @@ function readForm() {
   formInputs.forEach((input) => {
     setByPath(config, input.dataset.path, getInputValue(input));
   });
+  // Include list fields
+  setByPath(config, "vision.extra_templates", extraTemplates.slice());
+  setByPath(config, "vision.blacklist_templates", blacklistTemplates.slice());
   return config;
 }
 
@@ -175,14 +221,14 @@ function loadSettings() {
       captureTimeoutInput.value = settings.captureTimeout;
     }
   } catch (err) {
-    appendLog(`settings load failed: ${err}`);
+    appendLog(`设置加载失败: ${err}`);
   }
 }
 
 async function loadConfig() {
   const path = configPathInput.value.trim();
   if (!path) {
-    appendLog("config path is empty");
+    appendLog("配置文件路径为空");
     return;
   }
   try {
@@ -192,25 +238,25 @@ async function loadConfig() {
     if (templatePath) {
       captureOutputInput.value = templatePath;
     }
-    appendLog(`loaded ${path}`);
+    appendLog(`已加载 ${path}`);
   } catch (err) {
-    appendLog(`load failed: ${err}`);
+    appendLog(`加载失败: ${err}`);
   }
 }
 
 async function saveConfig() {
   const path = configPathInput.value.trim();
   if (!path) {
-    appendLog("config path is empty");
+    appendLog("配置文件路径为空");
     return false;
   }
   try {
     const config = readForm();
     await invoke("save_config", { path, config });
-    appendLog(`saved ${path}`);
+    appendLog(`已保存 ${path}`);
     return true;
   } catch (err) {
-    appendLog(`save failed: ${err}`);
+    appendLog(`保存失败: ${err}`);
     return false;
   }
 }
@@ -227,9 +273,9 @@ async function startBot() {
       once: runOnceInput.checked,
     });
     setRunning(true);
-    appendLog("bot started");
+    appendLog("钓鱼已启动");
   } catch (err) {
-    appendLog(`start failed: ${err}`);
+    appendLog(`启动失败: ${err}`);
   }
 }
 
@@ -237,9 +283,9 @@ async function stopBot() {
   try {
     await invoke("stop_bot");
     setRunning(false);
-    appendLog("bot stopped");
+    appendLog("钓鱼已停止");
   } catch (err) {
-    appendLog(`stop failed: ${err}`);
+    appendLog(`停止失败: ${err}`);
   }
 }
 
@@ -248,10 +294,10 @@ async function listDevices() {
     const output = await invoke("list_audio_devices", {
       pythonCmd: pythonCmdInput.value,
     });
-    appendLog("audio devices:");
+    appendLog("音频设备列表:");
     appendLogLines(output);
   } catch (err) {
-    appendLog(`device list failed: ${err}`);
+    appendLog(`获取设备列表失败: ${err}`);
   }
 }
 
@@ -262,15 +308,15 @@ async function recordAudio() {
   }
   const seconds = Number.parseFloat(recordSecondsInput.value);
   if (!Number.isFinite(seconds) || seconds <= 0) {
-    appendLog("record seconds must be > 0");
+    appendLog("录制时长必须大于 0");
     return;
   }
   const outputPath = recordOutputInput.value.trim();
   if (!outputPath) {
-    appendLog("record output path is empty");
+    appendLog("录音保存路径为空");
     return;
   }
-  appendLog(`recording ${seconds}s to ${outputPath}`);
+  appendLog(`正在录制 ${seconds} 秒到 ${outputPath}`);
   try {
     const output = await invoke("record_audio", {
       pythonCmd: pythonCmdInput.value,
@@ -281,10 +327,10 @@ async function recordAudio() {
     if (output) {
       appendLogLines(output);
     } else {
-      appendLog("record complete");
+      appendLog("录制完成");
     }
   } catch (err) {
-    appendLog(`record failed: ${err}`);
+    appendLog(`录制失败: ${err}`);
   }
 }
 
@@ -295,22 +341,22 @@ async function captureBobber() {
   }
   const size = Number.parseInt(captureSizeInput.value, 10);
   if (!Number.isFinite(size) || size <= 0) {
-    appendLog("capture size must be > 0");
+    appendLog("截图大小必须大于 0");
     return;
   }
   const timeout = Number.parseFloat(captureTimeoutInput.value);
   if (!Number.isFinite(timeout) || timeout <= 0) {
-    appendLog("capture timeout must be > 0");
+    appendLog("等待时间必须大于 0");
     return;
   }
   const outputPath = captureOutputInput.value.trim();
   if (!outputPath) {
-    appendLog("capture output path is empty");
+    appendLog("截图保存路径为空");
     return;
   }
   const wasRunning = startBtn.disabled;
   captureBtn.disabled = true;
-  appendLog(`capture started: click bobber within ${timeout}s`);
+  appendLog(`截取鱼漂: 请在 ${timeout} 秒内点击鱼漂`);
   try {
     const output = await invoke("capture_bobber", {
       pythonCmd: pythonCmdInput.value,
@@ -322,10 +368,10 @@ async function captureBobber() {
     if (output) {
       appendLogLines(output);
     } else {
-      appendLog("capture complete");
+      appendLog("截取完成");
     }
   } catch (err) {
-    appendLog(`capture failed: ${err}`);
+    appendLog(`截取失败: ${err}`);
   } finally {
     captureBtn.disabled = wasRunning;
   }
@@ -334,7 +380,7 @@ async function captureBobber() {
 async function pickRegion() {
   const timeout = Number.parseFloat(captureTimeoutInput.value) || 15;
   pickRegionBtn.disabled = true;
-  appendLog(`pick region: click TOP-LEFT corner, then BOTTOM-RIGHT corner (${timeout}s per click)`);
+  appendLog(`框选区域: 拖拽鼠标画出搜索范围，松开确认，ESC 取消`);
   try {
     const output = await invoke("capture_region", {
       pythonCmd: pythonCmdInput.value,
@@ -350,11 +396,53 @@ async function pickRegion() {
     regionTopInput.value = region.top;
     regionWidthInput.value = region.width;
     regionHeightInput.value = region.height;
-    appendLog(`region set: left=${region.left}, top=${region.top}, width=${region.width}, height=${region.height}`);
+    appendLog(`区域已设置: 左=${region.left}, 上=${region.top}, 宽=${region.width}, 高=${region.height}`);
   } catch (err) {
-    appendLog(`pick region failed: ${err}`);
+    appendLog(`框选区域失败: ${err}`);
   } finally {
     pickRegionBtn.disabled = false;
+  }
+}
+
+async function captureBlacklist() {
+  const saved = await saveConfig();
+  if (!saved) return;
+  const size = Number.parseInt(blacklistSizeInput.value, 10);
+  if (!Number.isFinite(size) || size <= 0) {
+    appendLog("黑名单截图大小必须大于 0");
+    return;
+  }
+  const timeout = Number.parseFloat(captureTimeoutInput.value);
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    appendLog("等待时间必须大于 0");
+    return;
+  }
+  const outputPath = blacklistOutputInput.value.trim();
+  if (!outputPath) {
+    appendLog("黑名单保存路径为空");
+    return;
+  }
+  captureBlacklistBtn.disabled = true;
+  appendLog(`截取黑名单图标: 请在 ${timeout} 秒内点击要排除的图标`);
+  try {
+    const output = await invoke("capture_blacklist", {
+      pythonCmd: pythonCmdInput.value,
+      configPath: configPathInput.value,
+      size,
+      outputPath,
+      timeout,
+    });
+    if (output) appendLogLines(output);
+    // Auto-add to blacklist templates list
+    if (!blacklistTemplates.includes(outputPath)) {
+      blacklistTemplates.push(outputPath);
+      renderListEditor(blacklistTemplatesList, blacklistTemplates, () => {});
+      appendLog(`已添加 '${outputPath}' 到黑名单模板`);
+    }
+  } catch (err) {
+    appendLog(`黑名单截取失败: ${err}`);
+  } finally {
+    captureBlacklistBtn.disabled = false;
   }
 }
 
@@ -367,6 +455,15 @@ function bindEvents() {
   recordBtn.addEventListener("click", recordAudio);
   captureBtn.addEventListener("click", captureBobber);
   pickRegionBtn.addEventListener("click", pickRegion);
+  captureBlacklistBtn.addEventListener("click", captureBlacklist);
+  addExtraTemplateBtn.addEventListener("click", () => {
+    extraTemplates.push("assets/bobber_angle.png");
+    renderListEditor(extraTemplatesList, extraTemplates, () => {});
+  });
+  addBlacklistTemplateBtn.addEventListener("click", () => {
+    blacklistTemplates.push("assets/blacklist_cursor.png");
+    renderListEditor(blacklistTemplatesList, blacklistTemplates, () => {});
+  });
   clearLogsBtn.addEventListener("click", () => {
     logLines.length = 0;
     logOutput.textContent = "";
@@ -392,12 +489,24 @@ async function init() {
   loadSettings();
   bindEvents();
 
+  // Check if sidecar (bundled exe) is available
+  try {
+    sidecarMode = await invoke("check_sidecar");
+  } catch (_) {
+    sidecarMode = false;
+  }
+  if (sidecarMode) {
+    const pythonRow = pythonCmdInput.closest(".field-row") || pythonCmdInput.parentElement;
+    if (pythonRow) pythonRow.style.display = "none";
+    appendLog("已检测到内置引擎，无需配置 Python");
+  }
+
   await listen("bot-log", (event) => {
     appendLogLines(String(event.payload));
   });
 
   await listen("bot-exit", (event) => {
-    appendLog(`bot exited: ${event.payload}`);
+    appendLog(`钓鱼已退出: ${event.payload}`);
     setRunning(false);
   });
 

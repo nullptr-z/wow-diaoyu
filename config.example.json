@@ -9,17 +9,28 @@
     "ratio_threshold": 0.35,
     "consecutive_hits": 2,
     "wasapi_loopback": false,
-    "device": null
+    "device": null,
+    "spike_factor": 2.0,
+    "spike_window": 20
   },
   "vision": {
     "template_path": "assets/bobber_template.png",
+    "extra_templates": [],
     "search_region": {
       "left": 200,
       "top": 200,
       "width": 800,
       "height": 600
     },
-    "match_threshold": 0.75
+    "match_threshold": 0.75,
+    "use_edge_detection": true,
+    "use_orb": true,
+    "orb_min_matches": 6,
+    "glow_check": false,
+    "glow_brightness_threshold": 200,
+    "glow_ratio_threshold": 0.15,
+    "blacklist_templates": [],
+    "blacklist_threshold": 0.6
   },
   "click": {
     "move_delay_sec": 0.05,

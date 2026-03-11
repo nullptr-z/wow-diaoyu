@@ -35,6 +35,71 @@ fn resolve_path(rel: &str) -> PathBuf {
     }
 }
 
+/// Try to find the bundled sidecar executable next to the running binary.
+/// Returns Some(path) if the sidecar exists, None otherwise (dev mode).
+fn find_sidecar() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    let dir = exe.parent()?;
+
+    // Tauri places sidecar binaries next to the main executable
+    #[cfg(target_os = "windows")]
+    let sidecar_name = "WowFishingBot.exe";
+    #[cfg(not(target_os = "windows"))]
+    let sidecar_name = "WowFishingBot";
+
+    let path = dir.join(sidecar_name);
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+/// Build a Command for the bot.
+/// - Sidecar mode: runs the bundled exe directly (no python needed)
+/// - Python mode: runs `python_cmd src/wow_fishing_bot.py` (dev fallback)
+fn bot_command(python_cmd: &str, args: &[&str]) -> Result<Command, String> {
+    if let Some(sidecar) = find_sidecar() {
+        let mut cmd = Command::new(sidecar);
+        cmd.current_dir(project_root());
+        cmd.args(args);
+        Ok(cmd)
+    } else {
+        if python_cmd.trim().is_empty() {
+            return Err("python command is empty (sidecar not found)".to_string());
+        }
+        let mut cmd = Command::new(python_cmd);
+        cmd.current_dir(project_root());
+        cmd.arg("src/wow_fishing_bot.py");
+        cmd.args(args);
+        Ok(cmd)
+    }
+}
+
+fn collect_output(output: std::process::Output) -> Result<String, String> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut combined = String::new();
+    if !stdout.trim().is_empty() {
+        combined.push_str(stdout.trim());
+    }
+    if !stderr.trim().is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(stderr.trim());
+    }
+    if !output.status.success() {
+        return Err(combined.trim().to_string());
+    }
+    Ok(combined.trim().to_string())
+}
+
+#[tauri::command]
+fn check_sidecar() -> bool {
+    find_sidecar().is_some()
+}
+
 #[tauri::command]
 fn load_config(path: String) -> Result<Value, String> {
     let full = resolve_path(&path);
@@ -51,6 +116,14 @@ fn save_config(path: String, config: Value) -> Result<(), String> {
 
 #[tauri::command]
 fn list_audio_devices(python_cmd: String) -> Result<String, String> {
+    if let Some(sidecar) = find_sidecar() {
+        let output = Command::new(sidecar)
+            .current_dir(project_root())
+            .arg("--list-devices")
+            .output()
+            .map_err(|err| err.to_string())?;
+        return collect_output(output);
+    }
     let output = Command::new(python_cmd)
         .current_dir(project_root())
         .args([
@@ -73,9 +146,6 @@ fn record_audio(
     seconds: f32,
     output_path: String,
 ) -> Result<String, String> {
-    if python_cmd.trim().is_empty() {
-        return Err("python command is empty".to_string());
-    }
     if config_path.trim().is_empty() {
         return Err("config path is empty".to_string());
     }
@@ -85,36 +155,15 @@ fn record_audio(
     if seconds <= 0.0 {
         return Err("record seconds must be > 0".to_string());
     }
-    let output = Command::new(python_cmd)
-        .current_dir(project_root())
-        .args([
-            "src/wow_fishing_bot.py",
-            "--config",
-            &config_path,
-            "--record",
-            "--record-seconds",
-            &seconds.to_string(),
-            "--record-out",
-            &output_path,
-        ])
-        .output()
-        .map_err(|err| err.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut combined = String::new();
-    if !stdout.trim().is_empty() {
-        combined.push_str(stdout.trim());
-    }
-    if !stderr.trim().is_empty() {
-        if !combined.is_empty() {
-            combined.push('\n');
-        }
-        combined.push_str(stderr.trim());
-    }
-    if !output.status.success() {
-        return Err(combined.trim().to_string());
-    }
-    Ok(combined.trim().to_string())
+    let sec_str = seconds.to_string();
+    let mut cmd = bot_command(&python_cmd, &[
+        "--config", &config_path,
+        "--record",
+        "--record-seconds", &sec_str,
+        "--record-out", &output_path,
+    ])?;
+    let output = cmd.output().map_err(|err| err.to_string())?;
+    collect_output(output)
 }
 
 #[tauri::command]
@@ -125,9 +174,6 @@ fn capture_bobber(
     output_path: String,
     timeout: f32,
 ) -> Result<String, String> {
-    if python_cmd.trim().is_empty() {
-        return Err("python command is empty".to_string());
-    }
     if config_path.trim().is_empty() {
         return Err("config path is empty".to_string());
     }
@@ -140,38 +186,17 @@ fn capture_bobber(
     if timeout <= 0.0 {
         return Err("capture timeout must be > 0".to_string());
     }
-    let output = Command::new(python_cmd)
-        .current_dir(project_root())
-        .args([
-            "src/wow_fishing_bot.py",
-            "--config",
-            &config_path,
-            "--capture-bobber",
-            "--capture-size",
-            &size.to_string(),
-            "--capture-out",
-            &output_path,
-            "--capture-timeout",
-            &timeout.to_string(),
-        ])
-        .output()
-        .map_err(|err| err.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut combined = String::new();
-    if !stdout.trim().is_empty() {
-        combined.push_str(stdout.trim());
-    }
-    if !stderr.trim().is_empty() {
-        if !combined.is_empty() {
-            combined.push('\n');
-        }
-        combined.push_str(stderr.trim());
-    }
-    if !output.status.success() {
-        return Err(combined.trim().to_string());
-    }
-    Ok(combined.trim().to_string())
+    let size_str = size.to_string();
+    let timeout_str = timeout.to_string();
+    let mut cmd = bot_command(&python_cmd, &[
+        "--config", &config_path,
+        "--capture-bobber",
+        "--capture-size", &size_str,
+        "--capture-out", &output_path,
+        "--capture-timeout", &timeout_str,
+    ])?;
+    let output = cmd.output().map_err(|err| err.to_string())?;
+    collect_output(output)
 }
 
 #[tauri::command]
@@ -180,43 +205,20 @@ fn capture_region(
     config_path: String,
     timeout: f32,
 ) -> Result<String, String> {
-    if python_cmd.trim().is_empty() {
-        return Err("python command is empty".to_string());
-    }
     if config_path.trim().is_empty() {
         return Err("config path is empty".to_string());
     }
     if timeout <= 0.0 {
         return Err("region timeout must be > 0".to_string());
     }
-    let output = Command::new(python_cmd)
-        .current_dir(project_root())
-        .args([
-            "src/wow_fishing_bot.py",
-            "--config",
-            &config_path,
-            "--capture-region",
-            "--region-timeout",
-            &timeout.to_string(),
-        ])
-        .output()
-        .map_err(|err| err.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut combined = String::new();
-    if !stdout.trim().is_empty() {
-        combined.push_str(stdout.trim());
-    }
-    if !stderr.trim().is_empty() {
-        if !combined.is_empty() {
-            combined.push('\n');
-        }
-        combined.push_str(stderr.trim());
-    }
-    if !output.status.success() {
-        return Err(combined.trim().to_string());
-    }
-    Ok(combined.trim().to_string())
+    let timeout_str = timeout.to_string();
+    let mut cmd = bot_command(&python_cmd, &[
+        "--config", &config_path,
+        "--capture-region",
+        "--region-timeout", &timeout_str,
+    ])?;
+    let output = cmd.output().map_err(|err| err.to_string())?;
+    collect_output(output)
 }
 
 #[tauri::command]
@@ -227,9 +229,6 @@ fn start_bot(
     config_path: String,
     once: bool,
 ) -> Result<(), String> {
-    if python_cmd.trim().is_empty() {
-        return Err("python command is empty".to_string());
-    }
     if config_path.trim().is_empty() {
         return Err("config path is empty".to_string());
     }
@@ -238,10 +237,7 @@ fn start_bot(
         return Err("bot already running".to_string());
     }
 
-    let root = project_root();
-    let mut cmd = Command::new(python_cmd);
-    cmd.current_dir(&root);
-    cmd.args(["src/wow_fishing_bot.py", "--config", &config_path]);
+    let mut cmd = bot_command(&python_cmd, &["--config", &config_path])?;
     if once {
         cmd.arg("--once");
     }
@@ -314,16 +310,51 @@ fn stop_bot(state: State<Arc<Mutex<BotState>>>) -> Result<(), String> {
     Err("bot not running".to_string())
 }
 
+#[tauri::command]
+fn capture_blacklist(
+    python_cmd: String,
+    config_path: String,
+    size: i32,
+    output_path: String,
+    timeout: f32,
+) -> Result<String, String> {
+    if config_path.trim().is_empty() {
+        return Err("config path is empty".to_string());
+    }
+    if output_path.trim().is_empty() {
+        return Err("output path is empty".to_string());
+    }
+    if size <= 0 {
+        return Err("capture size must be > 0".to_string());
+    }
+    if timeout <= 0.0 {
+        return Err("capture timeout must be > 0".to_string());
+    }
+    let size_str = size.to_string();
+    let timeout_str = timeout.to_string();
+    let mut cmd = bot_command(&python_cmd, &[
+        "--config", &config_path,
+        "--capture-blacklist",
+        "--blacklist-size", &size_str,
+        "--blacklist-out", &output_path,
+        "--capture-timeout", &timeout_str,
+    ])?;
+    let output = cmd.output().map_err(|err| err.to_string())?;
+    collect_output(output)
+}
+
 fn main() {
     let state = Arc::new(Mutex::new(BotState { child: None }));
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
+            check_sidecar,
             load_config,
             save_config,
             list_audio_devices,
             record_audio,
             capture_bobber,
+            capture_blacklist,
             capture_region,
             start_bot,
             stop_bot

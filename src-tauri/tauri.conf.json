@@ -11,11 +11,18 @@
     "version": "0.1.0"
   },
   "tauri": {
+    "bundle": {
+      "active": true,
+      "identifier": "com.wow.fishing-ui",
+      "externalBin": [
+        "binaries/WowFishingBot"
+      ]
+    },
     "windows": [
       {
-        "title": "WOW Fishing UI",
-        "width": 1100,
-        "height": 760,
+        "title": "WOW 自动钓鱼",
+        "width": 1300,
+        "height": 800,
         "resizable": true
       }
     ],

@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m venv .venv)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(pip install -r requirements.txt)",
+      "Bash(brew list --formula)",
+      "Read(//usr/local/bin/**)",
+      "Bash(ls /usr/local/bin/python3*)",
+      "Bash(/usr/local/Cellar/python*/*/bin/python3*)",
+      "Bash(--version)",
+      "Bash(brew info python@3.14)",
+      "Bash(rm -rf /Users/bilibili/claude-skills/wow-diaoyu/.venv)",
+      "Bash(/usr/local/bin/python3.14 -m venv /Users/bilibili/claude-skills/wow-diaoyu/.venv)",
+      "Bash(source /Users/bilibili/claude-skills/wow-diaoyu/.venv/bin/activate)",
+      "Bash(pip install --upgrade pip)",
+      "Bash(pip install -r /Users/bilibili/claude-skills/wow-diaoyu/requirements.txt)",
+      "Bash(brew install python@3.12)",
+      "Bash(/usr/local/bin/python3.12 -m venv /Users/bilibili/claude-skills/wow-diaoyu/.venv)",
+      "Bash(python -c \"import cv2; print\\(''cv2 OK, version:'', cv2.__version__\\)\")",
+      "Bash(cargo --version)",
+      "Bash(cargo tauri --version)",
+      "Bash(cargo install tauri-cli@1.5.14)",
+      "Bash(rustc --version)",
+      "Bash(npx @tauri-apps/cli@1 --version)",
+      "Bash(npx @tauri-apps/cli@1 dev)",
+      "mcp__personal-context-manager__update_context",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\(''src/wow_fishing_bot.py'', doraise=True\\)\")",
+      "Bash(cargo tauri dev)",
+      "Bash(cargo install tauri-cli --version \"^1\")",
+      "Bash(xcode-select --install)"
+    ]
+  }
+}
